@@ -432,6 +432,8 @@ public static class GitTools
             psi.ArgumentList.Add("-c");
             psi.ArgumentList.Add("protocol.ext.allow=never");
         }
+        psi.ArgumentList.Add("-c");
+        psi.ArgumentList.Add($"safe.directory={repository}");
         psi.ArgumentList.Add("-C");
         psi.ArgumentList.Add(repository);
         foreach (var argument in arguments)
