@@ -1,0 +1,18 @@
+# Build and acceptance outputs
+acceptance/
+staging/
+**/bin/
+**/obj/
+
+# Agent runtime state
+.agent3-audit/
+.agent3-handoff/
+
+# YowThi transactional backups
+*.yowthi-*.bak
+
+# Local/editor noise
+.vs/
+.vscode/
+*.user
+*.suo
