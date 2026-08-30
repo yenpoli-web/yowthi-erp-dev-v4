@@ -11,7 +11,8 @@ builder.Services.AddMcpServer()
     .WithToolsFromAssembly()
     .WithTools<YowThi.DevelopmentAgent3.Windows.NetworkTools>()
     .WithTools<YowThi.DevelopmentAgent3.Windows.DesktopTools>()
-    .WithTools<YowThi.DevelopmentAgent3.Windows.DesktopMutationTools>();
+    .WithTools<YowThi.DevelopmentAgent3.Windows.DesktopMutationTools>()
+    .WithTools<YowThi.DevelopmentAgent3.Docker.DockerTools>();
 
 var app = builder.Build();
 app.MapGet("/health", () => Results.Ok(new { service = "YowThi Development Agent 3", version = "3.0.0-alpha.1", status = "ok", machine = Environment.MachineName, utc = DateTimeOffset.UtcNow }));
