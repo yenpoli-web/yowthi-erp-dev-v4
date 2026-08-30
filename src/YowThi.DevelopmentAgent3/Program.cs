@@ -9,7 +9,8 @@ builder.Services.AddSingleton<ProtectedPathPolicy>();
 builder.Services.AddMcpServer()
     .WithHttpTransport(options => options.SessionMode = HttpServerSessionMode.Stateless)
     .WithToolsFromAssembly()
-    .WithTools<YowThi.DevelopmentAgent3.Windows.NetworkTools>();
+    .WithTools<YowThi.DevelopmentAgent3.Windows.NetworkTools>()
+    .WithTools<YowThi.DevelopmentAgent3.Windows.DesktopTools>();
 
 var app = builder.Build();
 app.MapGet("/health", () => Results.Ok(new { service = "YowThi Development Agent 3", version = "3.0.0-alpha.1", status = "ok", machine = Environment.MachineName, utc = DateTimeOffset.UtcNow }));
