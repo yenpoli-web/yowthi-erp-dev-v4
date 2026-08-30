@@ -14,7 +14,8 @@ builder.Services.AddMcpServer()
     .WithTools<YowThi.DevelopmentAgent3.Windows.DesktopMutationTools>()
     .WithTools<YowThi.DevelopmentAgent3.Docker.DockerTools>()
     .WithTools<YowThi.DevelopmentAgent3.Docker.DockerMutationTools>()
-    .WithTools<YowThi.DevelopmentAgent3.Postgres.PostgresTools>();
+    .WithTools<YowThi.DevelopmentAgent3.Postgres.PostgresTools>()
+    .WithTools<YowThi.DevelopmentAgent3.Postgres.PostgresMutationTools>();
 
 var app = builder.Build();
 app.MapGet("/health", () => Results.Ok(new { service = "YowThi Development Agent 3", version = "3.0.0-alpha.1", status = "ok", machine = Environment.MachineName, utc = DateTimeOffset.UtcNow }));
