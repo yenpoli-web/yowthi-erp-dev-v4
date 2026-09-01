@@ -45,7 +45,7 @@ public static class DotnetDevelopmentTools
     private const int MaxOutputChars = 1_000_000;
     private const int MaxRetainedJobs = 128;
     private const string DotnetExe = @"C:\Program Files\dotnet\dotnet.exe";
-    private const string DevRoot = @"C:\Dev\YowThi-ERP-Dev-v4";
+    private const string DevRoot = @"C:\Dev";
 
     private static readonly byte[] SigningKey = SHA256.HashData(Encoding.UTF8.GetBytes("YowThi-Agent3-Development-Key-v1"));
     private static readonly PlanSigner Signer = new(SigningKey);
@@ -66,7 +66,7 @@ public static class DotnetDevelopmentTools
     };
 
     [McpServerTool(Name = "dotnet_restore_plan", ReadOnly = false, Destructive = false, OpenWorld = false)]
-    [Description("Prepare a one-time signed plan to start one managed fixed dotnet restore job for a .NET project or solution under the YowThi ERP v4 development root. The project/solution graph, static ProjectReference inputs, applicable Directory.Build/Directory.Packages/global.json/NuGet configuration, target SHA-256, fixed dotnet.exe SHA-256, working directory, and timeout are fingerprinted and sealed. The plan itself performs no network access. Arbitrary CLI arguments, package sources, runtimes, properties, and production paths are rejected.")]
+    [Description("Prepare a one-time signed plan to start one managed fixed dotnet restore job for a .NET project or solution under the C:\\Dev development workspace root. The project/solution graph, static ProjectReference inputs, applicable Directory.Build/Directory.Packages/global.json/NuGet configuration, target SHA-256, fixed dotnet.exe SHA-256, working directory, and timeout are fingerprinted and sealed. The plan itself performs no network access. Arbitrary CLI arguments, package sources, runtimes, properties, paths outside C:\\Dev, and production paths are rejected.")]
     public static SignedPlan DotnetRestorePlan(string projectPath, int timeoutSeconds = 300)
         => Prepare(projectPath, "dotnet-restore", timeoutSeconds);
 
@@ -76,7 +76,7 @@ public static class DotnetDevelopmentTools
         => StartJob(planId, approvalCode, operation, target, summary, riskClass, "dotnet-restore");
 
     [McpServerTool(Name = "dotnet_test_plan", ReadOnly = false, Destructive = false, OpenWorld = false)]
-    [Description("Prepare a one-time signed plan to start one managed fixed dotnet test job for a .NET project or solution under the YowThi ERP v4 development root. The project/solution input fingerprint, fixed dotnet.exe SHA-256, exact Debug/Release build-output fingerprint, working directory, configuration, and timeout are sealed. Test execution is fixed to --no-restore --no-build so no build or dependency restore occurs after approval. Arbitrary test arguments, filters, loggers, environment variables, properties, and production paths are rejected.")]
+    [Description("Prepare a one-time signed plan to start one managed fixed dotnet test job for a .NET project or solution under the C:\\Dev development workspace root. The project/solution input fingerprint, fixed dotnet.exe SHA-256, exact Debug/Release build-output fingerprint, working directory, configuration, and timeout are sealed. Test execution is fixed to --no-restore --no-build so no build or dependency restore occurs after approval. Arbitrary test arguments, filters, loggers, environment variables, properties, paths outside C:\\Dev, and production paths are rejected.")]
     public static SignedPlan DotnetTestPlan(string projectPath, string configuration = "Release", int timeoutSeconds = 600)
     {
         if (configuration is not ("Debug" or "Release"))
@@ -155,7 +155,7 @@ public static class DotnetDevelopmentTools
     }
 
     [McpServerTool(Name = "dotnet_job_cancel_execute", ReadOnly = false, Destructive = false, OpenWorld = false)]
-    [Description("Execute one previously prepared build/dotnet-job-cancel plan. Only the exact active Agent-owned dotnet job sealed in the plan can be terminated. Job ID, operation, project identity, PID, and process start time are revalidated before native .NET process-tree termination. Arbitrary PID termination is not supported.")]
+    [Description("Execute one previously prepared build/dotnet-job-cancel plan. Only the exact active Agent-owned dotnet restore/test job sealed in the plan can be terminated. Job ID, operation, project identity, PID, and process start time are revalidated before native .NET process-tree termination. Arbitrary PID termination is not supported.")]
     public static async Task<ExecutionResult> DotnetJobCancelExecute(string planId, string approvalCode, string operation, string target, string summary, string riskClass)
     {
         var plan = Store.GetValidated(planId, approvalCode);
@@ -547,7 +547,7 @@ public static class DotnetDevelopmentTools
     private static string ValidateInputFile(string path)
     {
         var full = Path.GetFullPath(path);
-        if (!IsUnderDevRoot(full)) throw new UnauthorizedAccessException("Project graph inputs must remain under the YowThi ERP v4 development root.");
+        if (!IsUnderDevRoot(full)) throw new UnauthorizedAccessException("Project graph inputs must remain under the C:\\Dev development workspace root.");
         if (!File.Exists(full)) throw new FileNotFoundException("Project graph input does not exist.", full);
         RequireNoReparseTraversal(full);
         return full;
@@ -670,7 +670,7 @@ public static class DotnetDevelopmentTools
             throw new ArgumentException("Project or solution path must be absolute.", nameof(projectPath));
         var project = Path.GetFullPath(projectPath);
         if (!File.Exists(project)) throw new FileNotFoundException("Project or solution not found.", project);
-        if (!IsUnderDevRoot(project)) throw new UnauthorizedAccessException("Project must be under the YowThi ERP v4 development root.");
+        if (!IsUnderDevRoot(project)) throw new UnauthorizedAccessException("Project must be under the C:\\Dev development workspace root.");
         if (project.StartsWith(@"C:\yowthi-erp\", StringComparison.OrdinalIgnoreCase)) throw new UnauthorizedAccessException("Production ERP paths are blocked.");
         var extension = Path.GetExtension(project);
         if (!string.Equals(extension, ".csproj", StringComparison.OrdinalIgnoreCase) && !string.Equals(extension, ".sln", StringComparison.OrdinalIgnoreCase) && !string.Equals(extension, ".slnx", StringComparison.OrdinalIgnoreCase))
