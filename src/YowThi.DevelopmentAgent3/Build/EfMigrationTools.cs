@@ -1,10 +1,12 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using ModelContextProtocol.Server;
+using Npgsql;
 using YowThi.DevelopmentAgent3.Audit;
 using YowThi.DevelopmentAgent3.Core;
 
@@ -72,7 +74,7 @@ public static class EfMigrationTools
     }
 
     [McpServerTool(Name = "ef_migration_status", ReadOnly = true, Destructive = false, OpenWorld = false)]
-    [Description("Read applied/pending EF Core migration status for one built development project/context under C:\\Dev against the server-side registered loopback-only development database profile for that workspace. Project/startup files, stable build-output fingerprints, fixed dotnet-ef binaries, profile identity, context, and environment are validated before and after the fixed migrations list --no-build --json query. This is read-only with respect to the database and accepts no caller connection string or arbitrary EF arguments.")]
+    [Description("Read applied/pending EF Core migration status for one built development project/context under C:\\Dev against the server-side registered loopback-only development database profile for that workspace. Project/startup files, stable build-output fingerprints, fixed dotnet-ef binaries, profile identity, context, and environment are validated first. If the registered development database cannot be opened, the tool returns a structured database-unavailable result with null migration counts/fingerprint instead of throwing a generic invocation error. Path, build, tool, reparse, and identity validation failures still fail the invocation. No caller connection string or arbitrary EF arguments are accepted.")]
     public static EfMigrationStatusResult EfMigrationStatus(
         string projectPath,
         string startupProjectPath,
@@ -81,7 +83,33 @@ public static class EfMigrationTools
         string environment = "Development")
     {
         var input = ValidateInput(projectPath, startupProjectPath, contextName, configuration, environment);
-        var snapshot = ReadStableMigrationSnapshot(input, 120);
+        var identity = ReadExecutionIdentity(input);
+        var database = ProbeDatabaseAvailability(input.Profile);
+        RequireIdentityMatch(identity, ReadExecutionIdentity(input));
+
+        if (!database.Available)
+        {
+            return new EfMigrationStatusResult(
+                input.ProjectPath,
+                input.StartupProjectPath,
+                input.ContextName,
+                input.Configuration,
+                input.Environment,
+                input.Profile.DatabaseIdentity,
+                "database-unavailable",
+                false,
+                null,
+                null,
+                null,
+                Array.Empty<string>(),
+                Array.Empty<string>(),
+                null,
+                database.FailureReason,
+                DateTimeOffset.UtcNow);
+        }
+
+        var snapshot = ReadMigrationSnapshot(input, 120);
+        RequireIdentityMatch(identity, ReadExecutionIdentity(input));
         return new EfMigrationStatusResult(
             input.ProjectPath,
             input.StartupProjectPath,
@@ -89,12 +117,15 @@ public static class EfMigrationTools
             input.Configuration,
             input.Environment,
             input.Profile.DatabaseIdentity,
+            "ok",
+            true,
             snapshot.Migrations.Count,
             snapshot.Migrations.Count(x => x.Applied),
             snapshot.Migrations.Count(x => !x.Applied),
             snapshot.Migrations.Where(x => x.Applied).Select(x => x.Id).ToArray(),
             snapshot.Migrations.Where(x => !x.Applied).Select(x => x.Id).ToArray(),
             snapshot.FingerprintSha256,
+            null,
             DateTimeOffset.UtcNow);
     }
 
@@ -357,6 +388,57 @@ public static class EfMigrationTools
 
         return profile;
     }
+
+    private static EfDatabaseAvailability ProbeDatabaseAvailability(EfDevelopmentProfile profile)
+    {
+        try
+        {
+            using var connection = new NpgsqlConnection(profile.ConnectionString);
+            connection.Open();
+            return new EfDatabaseAvailability(true, null);
+        }
+        catch (PostgresException ex)
+        {
+            return new EfDatabaseAvailability(
+                false,
+                $"PostgreSQL rejected the registered development database profile {profile.DatabaseIdentity} (SQLSTATE {ex.SqlState}).");
+        }
+        catch (NpgsqlException ex) when (ex.InnerException is SocketException socket)
+        {
+            return new EfDatabaseAvailability(
+                false,
+                $"Development database {profile.DatabaseIdentity} is unavailable ({NormalizeSocketError(socket.SocketErrorCode)})." );
+        }
+        catch (NpgsqlException)
+        {
+            return new EfDatabaseAvailability(
+                false,
+                $"Development database {profile.DatabaseIdentity} could not be opened using the registered server-side profile.");
+        }
+        catch (SocketException ex)
+        {
+            return new EfDatabaseAvailability(
+                false,
+                $"Development database {profile.DatabaseIdentity} is unavailable ({NormalizeSocketError(ex.SocketErrorCode)})." );
+        }
+        catch (TimeoutException)
+        {
+            return new EfDatabaseAvailability(
+                false,
+                $"Development database {profile.DatabaseIdentity} connection timed out.");
+        }
+    }
+
+    private static string NormalizeSocketError(SocketError error)
+        => error switch
+        {
+            SocketError.ConnectionRefused => "connection-refused",
+            SocketError.HostNotFound => "host-not-found",
+            SocketError.TimedOut => "timeout",
+            SocketError.NetworkUnreachable => "network-unreachable",
+            SocketError.HostUnreachable => "host-unreachable",
+            _ => $"socket-{error}"
+        };
 
     private static bool IsLoopbackHost(string host)
         => string.Equals(host, "127.0.0.1", StringComparison.OrdinalIgnoreCase)
@@ -762,6 +844,10 @@ public static class EfMigrationTools
         int ExitCode,
         string StdOut,
         string StdErr);
+
+    private sealed record EfDatabaseAvailability(
+        bool Available,
+        string? FailureReason);
 }
 
 public sealed record EfMigrationEntry(string Id, string Name, bool Applied);
@@ -784,12 +870,15 @@ public sealed record EfMigrationStatusResult(
     string Configuration,
     string Environment,
     string DatabaseIdentity,
-    int TotalCount,
-    int AppliedCount,
-    int PendingCount,
+    string Status,
+    bool DatabaseAvailable,
+    int? TotalCount,
+    int? AppliedCount,
+    int? PendingCount,
     IReadOnlyList<string> AppliedMigrationIds,
     IReadOnlyList<string> PendingMigrationIds,
-    string StateFingerprintSha256,
+    string? StateFingerprintSha256,
+    string? FailureReason,
     DateTimeOffset CheckedUtc);
 
 public sealed record EfDatabaseUpdateResult(
