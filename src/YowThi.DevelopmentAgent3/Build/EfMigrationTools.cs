@@ -53,15 +53,20 @@ public static class EfMigrationTools
             "postgres")
     ];
 
-    private static readonly Regex ContextNamePattern = new("^[A-Za-z_][A-Za-z0-9_.]{0,255}$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex EnvironmentPattern = new("^[A-Za-z][A-Za-z0-9_.-]{0,63}$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly byte[] SigningKey = SHA256.HashData(Encoding.UTF8.GetBytes("YowThi-Agent3-Development-Key-v1"));
+    private static readonly Regex ContextNamePattern = new(
+        "^[A-Za-z_][A-Za-z0-9_.]{0,255}$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex EnvironmentPattern = new(
+        "^[A-Za-z][A-Za-z0-9_.-]{0,63}$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly byte[] SigningKey = SHA256.HashData(
+        Encoding.UTF8.GetBytes("YowThi-Agent3-Development-Key-v1"));
     private static readonly PlanSigner Signer = new(SigningKey);
     private static readonly PlanStore Store = new(Signer);
     private static readonly AuditChain Audit = new(@"C:\Dev\YowThi-ERP-Dev-v4\.agent3-audit");
 
     [McpServerTool(Name = "ef_migration_list", ReadOnly = true, Destructive = false, OpenWorld = false)]
-    [Description("List EF Core migrations for one built development project/context under C:\\Dev using the fixed dotnet-ef 10.0.10 tool and a server-side registered loopback-only development database profile resolved from the workspace root. Project/startup files, stable Debug/Release build-output fingerprints, fixed dotnet-ef shim/payload SHA-256, context, environment, database profile identity, and project state are validated before and after the fixed migrations list --no-build --json query. No caller connection string, arbitrary EF arguments, production path, build, migration creation, or database mutation is supported.")]
+    [Description("List EF Core migrations for one built development project/context under C:\\Dev using the fixed dotnet-ef 10.0.10 tool and a server-side registered loopback-only development database profile resolved from the workspace root. Project/startup files, stable Debug/Release build-output fingerprints, fixed dotnet-ef shim/payload SHA-256, context, environment, and database profile identity are validated first. If the registered development database cannot be opened, the tool returns a structured database-unavailable result with an empty migrations list and null migration-state fingerprint instead of throwing a generic invocation error. Path, build, tool, reparse, and identity validation failures still fail the invocation. No caller connection string, arbitrary EF arguments, production path, build, migration creation, or database mutation is supported.")]
     public static EfMigrationListResult EfMigrationList(
         string projectPath,
         string startupProjectPath,
@@ -70,7 +75,16 @@ public static class EfMigrationTools
         string environment = "Development")
     {
         var input = ValidateInput(projectPath, startupProjectPath, contextName, configuration, environment);
-        return ToListResult(input, ReadStableMigrationSnapshot(input, 120));
+        var identity = ReadExecutionIdentity(input);
+        var database = ProbeDatabaseAvailability(input.Profile);
+        RequireIdentityMatch(identity, ReadExecutionIdentity(input));
+
+        if (!database.Available)
+            return ToUnavailableListResult(input, database.FailureReason);
+
+        var snapshot = ReadMigrationSnapshot(input, 120);
+        RequireIdentityMatch(identity, ReadExecutionIdentity(input));
+        return ToListResult(input, snapshot);
     }
 
     [McpServerTool(Name = "ef_migration_status", ReadOnly = true, Destructive = false, OpenWorld = false)]
@@ -140,7 +154,9 @@ public static class EfMigrationTools
         int timeoutSeconds = 600)
     {
         if (timeoutSeconds < 30 || timeoutSeconds > 1800)
-            throw new ArgumentOutOfRangeException(nameof(timeoutSeconds), "Timeout must be between 30 and 1800 seconds.");
+            throw new ArgumentOutOfRangeException(
+                nameof(timeoutSeconds),
+                "Timeout must be between 30 and 1800 seconds.");
 
         var input = ValidateInput(projectPath, startupProjectPath, contextName, configuration, environment);
         var identity = ReadExecutionIdentity(input);
@@ -149,7 +165,8 @@ public static class EfMigrationTools
 
         var pending = snapshot.Migrations.Where(x => !x.Applied).Select(x => x.Id).ToArray();
         if (pending.Length == 0)
-            throw new InvalidOperationException("No pending EF Core migrations exist for the resolved development database profile.");
+            throw new InvalidOperationException(
+                "No pending EF Core migrations exist for the resolved development database profile.");
 
         var parameters = new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -174,7 +191,8 @@ public static class EfMigrationTools
 
         var now = DateTimeOffset.UtcNow;
         var target = $"{input.Profile.DatabaseIdentity}:{input.ContextName}";
-        var summary = $"Apply {pending.Length} pending EF Core migration(s) forward to latest in development database {input.Profile.DatabaseIdentity} for context {input.ContextName}";
+        var summary =
+            $"Apply {pending.Length} pending EF Core migration(s) forward to latest in development database {input.Profile.DatabaseIdentity} for context {input.ContextName}";
         var unsigned = new SignedPlan(
             1,
             Guid.NewGuid().ToString("N"),
@@ -225,18 +243,32 @@ public static class EfMigrationTools
         var currentIdentity = ReadExecutionIdentity(input);
         RequireIdentityMatch(expectedIdentity, currentIdentity);
 
-        if (!string.Equals(RequireParameter(plan, "databaseProfile"), input.Profile.Name, StringComparison.Ordinal))
+        if (!string.Equals(
+                RequireParameter(plan, "databaseProfile"),
+                input.Profile.Name,
+                StringComparison.Ordinal))
             throw new InvalidDataException("Signed EF development database profile changed.");
-        if (!string.Equals(RequireParameter(plan, "databaseIdentity"), input.Profile.DatabaseIdentity, StringComparison.Ordinal))
+        if (!string.Equals(
+                RequireParameter(plan, "databaseIdentity"),
+                input.Profile.DatabaseIdentity,
+                StringComparison.Ordinal))
             throw new InvalidDataException("Signed EF database identity changed.");
-        if (!string.Equals(RequireParameter(plan, "dotnetEfVersion"), DotnetEfVersion, StringComparison.Ordinal))
+        if (!string.Equals(
+                RequireParameter(plan, "dotnetEfVersion"),
+                DotnetEfVersion,
+                StringComparison.Ordinal))
             throw new InvalidDataException("Signed dotnet-ef version is invalid.");
-        if (!int.TryParse(RequireParameter(plan, "timeoutSeconds"), out var timeoutSeconds) || timeoutSeconds < 30 || timeoutSeconds > 1800)
+        if (!int.TryParse(RequireParameter(plan, "timeoutSeconds"), out var timeoutSeconds)
+            || timeoutSeconds < 30
+            || timeoutSeconds > 1800)
             throw new InvalidDataException("Signed EF timeout is invalid.");
 
         var before = ReadMigrationSnapshot(input, 120);
         RequireIdentityMatch(currentIdentity, ReadExecutionIdentity(input));
-        if (!string.Equals(before.FingerprintSha256, RequireParameter(plan, "migrationStateSha256"), StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(
+                before.FingerprintSha256,
+                RequireParameter(plan, "migrationStateSha256"),
+                StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("EF migration state changed after plan preparation.");
 
         var expectedPending = RequireParameter(plan, "pendingMigrationIds")
@@ -245,13 +277,21 @@ public static class EfMigrationTools
         if (!expectedPending.SequenceEqual(currentPending, StringComparer.Ordinal))
             throw new InvalidOperationException("Pending EF migration set changed after plan preparation.");
         if (currentPending.Length == 0)
-            throw new InvalidOperationException("Signed EF database-update plan no longer has pending migrations.");
+            throw new InvalidOperationException(
+                "Signed EF database-update plan no longer has pending migrations.");
 
         try
         {
-            var execution = RunEf(input, timeoutSeconds, "database", "update", "--connection", input.Profile.ConnectionString);
+            var execution = RunEf(
+                input,
+                timeoutSeconds,
+                "database",
+                "update",
+                "--connection",
+                input.Profile.ConnectionString);
             if (execution.ExitCode != 0)
-                throw new InvalidOperationException($"dotnet-ef database update failed with exit code {execution.ExitCode}. stderr: {Truncate(execution.StdErr, 4000)}");
+                throw new InvalidOperationException(
+                    $"dotnet-ef database update failed with exit code {execution.ExitCode}. stderr: {Truncate(execution.StdErr, 4000)}");
 
             RequireIdentityMatch(currentIdentity, ReadExecutionIdentity(input));
             var after = ReadMigrationSnapshot(input, 120);
@@ -259,11 +299,15 @@ public static class EfMigrationTools
 
             var remainingPending = after.Migrations.Where(x => !x.Applied).Select(x => x.Id).ToArray();
             if (remainingPending.Length != 0)
-                throw new InvalidOperationException("EF database update verification failed because pending migrations remain.");
+                throw new InvalidOperationException(
+                    "EF database update verification failed because pending migrations remain.");
 
-            var appliedAfter = new HashSet<string>(after.Migrations.Where(x => x.Applied).Select(x => x.Id), StringComparer.Ordinal);
+            var appliedAfter = new HashSet<string>(
+                after.Migrations.Where(x => x.Applied).Select(x => x.Id),
+                StringComparer.Ordinal);
             if (expectedPending.Any(x => !appliedAfter.Contains(x)))
-                throw new InvalidOperationException("EF database update verification failed because one or more signed pending migrations are not applied.");
+                throw new InvalidOperationException(
+                    "EF database update verification failed because one or more signed pending migrations are not applied.");
 
             Store.Consume(planId);
             Audit.Append(
@@ -325,15 +369,21 @@ public static class EfMigrationTools
 
         var context = (contextName ?? string.Empty).Trim();
         if (!ContextNamePattern.IsMatch(context))
-            throw new ArgumentException("contextName must be a simple or namespace-qualified .NET type name.", nameof(contextName));
+            throw new ArgumentException(
+                "contextName must be a simple or namespace-qualified .NET type name.",
+                nameof(contextName));
 
         var config = (configuration ?? string.Empty).Trim();
         if (config is not ("Debug" or "Release"))
-            throw new ArgumentException("configuration must be Debug or Release.", nameof(configuration));
+            throw new ArgumentException(
+                "configuration must be Debug or Release.",
+                nameof(configuration));
 
         var env = (environment ?? string.Empty).Trim();
         if (!EnvironmentPattern.IsMatch(env))
-            throw new ArgumentException("environment contains unsupported characters.", nameof(environment));
+            throw new ArgumentException(
+                "environment contains unsupported characters.",
+                nameof(environment));
 
         var profile = ResolveDevelopmentProfile(project, startup);
         RequireEfTool();
@@ -352,7 +402,8 @@ public static class EfMigrationTools
             throw new InvalidOperationException("EF project/startup targets must be .csproj files.");
 
         if (!IsWithinRoot(full, DevRoot))
-            throw new UnauthorizedAccessException("EF project/startup paths must remain under the C:\\Dev development workspace root.");
+            throw new UnauthorizedAccessException(
+                "EF project/startup paths must remain under the C:\\Dev development workspace root.");
         if (IsWithinRoot(full, ProductionRoot))
             throw new UnauthorizedAccessException("Production ERP paths are blocked.");
 
@@ -360,7 +411,9 @@ public static class EfMigrationTools
         return full;
     }
 
-    private static EfDevelopmentProfile ResolveDevelopmentProfile(string projectPath, string startupProjectPath)
+    private static EfDevelopmentProfile ResolveDevelopmentProfile(
+        string projectPath,
+        string startupProjectPath)
     {
         var projectMatches = DevelopmentProfiles
             .Where(profile => IsWithinRoot(projectPath, profile.WorkspaceRoot))
@@ -372,19 +425,25 @@ public static class EfMigrationTools
             .ToArray();
 
         if (projectMatches.Length == 0)
-            throw new InvalidOperationException($"No server-side EF development database profile is registered for project workspace: {projectPath}");
+            throw new InvalidOperationException(
+                $"No server-side EF development database profile is registered for project workspace: {projectPath}");
         if (startupMatches.Length == 0)
-            throw new InvalidOperationException($"No server-side EF development database profile is registered for startup workspace: {startupProjectPath}");
+            throw new InvalidOperationException(
+                $"No server-side EF development database profile is registered for startup workspace: {startupProjectPath}");
         if (!string.Equals(projectMatches[0].Name, startupMatches[0].Name, StringComparison.Ordinal))
-            throw new InvalidOperationException("EF project and startup project must resolve to the same server-side development database profile.");
+            throw new InvalidOperationException(
+                "EF project and startup project must resolve to the same server-side development database profile.");
 
         var profile = projectMatches[0];
         if (!IsLoopbackHost(profile.Host))
-            throw new InvalidOperationException("EF development database profiles must use a loopback host.");
+            throw new InvalidOperationException(
+                "EF development database profiles must use a loopback host.");
         if (profile.Port < 1 || profile.Port > 65535)
-            throw new InvalidOperationException("EF development database profile port is invalid.");
+            throw new InvalidOperationException(
+                "EF development database profile port is invalid.");
         if (string.IsNullOrWhiteSpace(profile.Database) || string.IsNullOrWhiteSpace(profile.Username))
-            throw new InvalidOperationException("EF development database profile identity is incomplete.");
+            throw new InvalidOperationException(
+                "EF development database profile identity is incomplete.");
 
         return profile;
     }
@@ -407,7 +466,7 @@ public static class EfMigrationTools
         {
             return new EfDatabaseAvailability(
                 false,
-                $"Development database {profile.DatabaseIdentity} is unavailable ({NormalizeSocketError(socket.SocketErrorCode)})." );
+                $"Development database {profile.DatabaseIdentity} is unavailable ({NormalizeSocketError(socket.SocketErrorCode)}).");
         }
         catch (NpgsqlException)
         {
@@ -419,7 +478,7 @@ public static class EfMigrationTools
         {
             return new EfDatabaseAvailability(
                 false,
-                $"Development database {profile.DatabaseIdentity} is unavailable ({NormalizeSocketError(ex.SocketErrorCode)})." );
+                $"Development database {profile.DatabaseIdentity} is unavailable ({NormalizeSocketError(ex.SocketErrorCode)}).");
         }
         catch (TimeoutException)
         {
@@ -447,7 +506,8 @@ public static class EfMigrationTools
 
     private static bool IsWithinRoot(string path, string rootPath)
     {
-        var root = Path.GetFullPath(rootPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var root = Path.GetFullPath(rootPath)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         var full = Path.GetFullPath(path);
         return string.Equals(full, root, StringComparison.OrdinalIgnoreCase)
             || full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
@@ -458,13 +518,20 @@ public static class EfMigrationTools
         if ((File.GetAttributes(filePath) & FileAttributes.ReparsePoint) != 0)
             throw new UnauthorizedAccessException("Reparse-point project files are not allowed.");
 
-        var root = Path.GetFullPath(rootPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var root = Path.GetFullPath(rootPath)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         var directory = new DirectoryInfo(Path.GetDirectoryName(filePath)!);
         while (directory is not null)
         {
             if ((directory.Attributes & FileAttributes.ReparsePoint) != 0)
-                throw new UnauthorizedAccessException("Reparse-point traversal is not allowed for EF project paths.");
-            if (string.Equals(directory.FullName.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), root, StringComparison.OrdinalIgnoreCase))
+                throw new UnauthorizedAccessException(
+                    "Reparse-point traversal is not allowed for EF project paths.");
+            if (string.Equals(
+                    directory.FullName.TrimEnd(
+                        Path.DirectorySeparatorChar,
+                        Path.AltDirectorySeparatorChar),
+                    root,
+                    StringComparison.OrdinalIgnoreCase))
                 return;
             directory = directory.Parent;
         }
@@ -475,12 +542,17 @@ public static class EfMigrationTools
     private static void RequireEfTool()
     {
         if (!File.Exists(DotnetEfExe))
-            throw new FileNotFoundException("Fixed dotnet-ef executable is missing.", DotnetEfExe);
+            throw new FileNotFoundException(
+                "Fixed dotnet-ef executable is missing.",
+                DotnetEfExe);
         if (!File.Exists(DotnetEfPayload))
-            throw new FileNotFoundException("Fixed dotnet-ef payload is missing.", DotnetEfPayload);
-        if ((File.GetAttributes(DotnetEfExe) & FileAttributes.ReparsePoint) != 0 ||
-            (File.GetAttributes(DotnetEfPayload) & FileAttributes.ReparsePoint) != 0)
-            throw new UnauthorizedAccessException("Fixed dotnet-ef binaries may not be reparse points.");
+            throw new FileNotFoundException(
+                "Fixed dotnet-ef payload is missing.",
+                DotnetEfPayload);
+        if ((File.GetAttributes(DotnetEfExe) & FileAttributes.ReparsePoint) != 0
+            || (File.GetAttributes(DotnetEfPayload) & FileAttributes.ReparsePoint) != 0)
+            throw new UnauthorizedAccessException(
+                "Fixed dotnet-ef binaries may not be reparse points.");
     }
 
     private static EfExecutionIdentity ReadExecutionIdentity(EfValidatedInput input)
@@ -497,16 +569,19 @@ public static class EfMigrationTools
         var projectDirectory = Path.GetDirectoryName(projectPath)!;
         var buildRoot = Path.Combine(projectDirectory, "bin", configuration);
         if (!Directory.Exists(buildRoot))
-            throw new DirectoryNotFoundException($"Built output directory does not exist: {buildRoot}. Build the project before using EF tools.");
+            throw new DirectoryNotFoundException(
+                $"Built output directory does not exist: {buildRoot}. Build the project before using EF tools.");
         if ((File.GetAttributes(buildRoot) & FileAttributes.ReparsePoint) != 0)
-            throw new UnauthorizedAccessException("Reparse-point build output directories are not allowed.");
+            throw new UnauthorizedAccessException(
+                "Reparse-point build output directories are not allowed.");
 
         var files = EnumerateBuildFiles(buildRoot)
             .Where(file => !IsEfDesignBuildHostFile(buildRoot, file))
             .OrderBy(file => Path.GetRelativePath(buildRoot, file), StringComparer.Ordinal)
             .ToArray();
         if (files.Length == 0)
-            throw new InvalidOperationException($"Stable built output directory is empty: {buildRoot}.");
+            throw new InvalidOperationException(
+                $"Stable built output directory is empty: {buildRoot}.");
 
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         foreach (var file in files)
@@ -515,9 +590,14 @@ public static class EfMigrationTools
             hash.AppendData(Encoding.UTF8.GetBytes(relative));
             hash.AppendData(new byte[] { 0 });
             hash.AppendData(BitConverter.GetBytes(new FileInfo(file).Length));
-            using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read);
+            using var stream = new FileStream(
+                file,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read);
             hash.AppendData(SHA256.HashData(stream));
         }
+
         return Convert.ToHexString(hash.GetHashAndReset());
     }
 
@@ -529,13 +609,15 @@ public static class EfMigrationTools
         {
             var current = stack.Pop();
             if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
-                throw new UnauthorizedAccessException("Reparse-point build output directories are not allowed.");
+                throw new UnauthorizedAccessException(
+                    "Reparse-point build output directories are not allowed.");
 
             foreach (var entry in Directory.EnumerateFileSystemEntries(current))
             {
                 var attributes = File.GetAttributes(entry);
                 if ((attributes & FileAttributes.ReparsePoint) != 0)
-                    throw new UnauthorizedAccessException("Reparse-point build output entries are not allowed.");
+                    throw new UnauthorizedAccessException(
+                        "Reparse-point build output entries are not allowed.");
                 if ((attributes & FileAttributes.Directory) != 0)
                     stack.Push(entry);
                 else
@@ -551,16 +633,9 @@ public static class EfMigrationTools
             || relative.StartsWith("BuildHost-netcore/", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static EfMigrationSnapshot ReadStableMigrationSnapshot(EfValidatedInput input, int timeoutSeconds)
-    {
-        var before = ReadExecutionIdentity(input);
-        var snapshot = ReadMigrationSnapshot(input, timeoutSeconds);
-        var after = ReadExecutionIdentity(input);
-        RequireIdentityMatch(before, after);
-        return snapshot;
-    }
-
-    private static EfMigrationSnapshot ReadMigrationSnapshot(EfValidatedInput input, int timeoutSeconds)
+    private static EfMigrationSnapshot ReadMigrationSnapshot(
+        EfValidatedInput input,
+        int timeoutSeconds)
     {
         var execution = RunEf(
             input,
@@ -572,38 +647,48 @@ public static class EfMigrationTools
             "--json");
 
         if (execution.ExitCode != 0)
-            throw new InvalidOperationException($"dotnet-ef migrations list failed with exit code {execution.ExitCode}. stderr: {Truncate(execution.StdErr, 4000)}");
+            throw new InvalidOperationException(
+                $"dotnet-ef migrations list failed with exit code {execution.ExitCode}. stderr: {Truncate(execution.StdErr, 4000)}");
 
         var json = ExtractJsonArray(execution.StdOut);
         using var document = JsonDocument.Parse(json);
         if (document.RootElement.ValueKind != JsonValueKind.Array)
-            throw new InvalidDataException("dotnet-ef migrations list JSON root is not an array.");
+            throw new InvalidDataException(
+                "dotnet-ef migrations list JSON root is not an array.");
 
         var migrations = new List<EfMigrationEntry>();
         foreach (var item in document.RootElement.EnumerateArray())
         {
             if (item.ValueKind != JsonValueKind.Object)
-                throw new InvalidDataException("dotnet-ef migration JSON contains a non-object entry.");
+                throw new InvalidDataException(
+                    "dotnet-ef migration JSON contains a non-object entry.");
 
             var id = RequireJsonString(item, "id");
             var name = RequireJsonString(item, "name");
             if (!TryGetJsonBoolean(item, "applied", out var applied))
-                throw new InvalidDataException("dotnet-ef migration JSON does not contain a boolean applied state.");
+                throw new InvalidDataException(
+                    "dotnet-ef migration JSON does not contain a boolean applied state.");
 
             migrations.Add(new EfMigrationEntry(id, name, applied));
         }
 
         if (migrations.Select(x => x.Id).Distinct(StringComparer.Ordinal).Count() != migrations.Count)
-            throw new InvalidDataException("dotnet-ef migration JSON contains duplicate migration IDs.");
+            throw new InvalidDataException(
+                "dotnet-ef migration JSON contains duplicate migration IDs.");
 
         migrations.Sort((a, b) => StringComparer.Ordinal.Compare(a.Id, b.Id));
-        var canonical = string.Join("\n", migrations.Select(x => $"{x.Id}|{x.Name}|{(x.Applied ? "1" : "0")}"));
+        var canonical = string.Join(
+            "\n",
+            migrations.Select(x => $"{x.Id}|{x.Name}|{(x.Applied ? "1" : "0")}"));
         return new EfMigrationSnapshot(
             migrations,
             Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))));
     }
 
-    private static EfProcessResult RunEf(EfValidatedInput input, int timeoutSeconds, params string[] commandArguments)
+    private static EfProcessResult RunEf(
+        EfValidatedInput input,
+        int timeoutSeconds,
+        params string[] commandArguments)
     {
         var projectDirectory = Path.GetDirectoryName(input.ProjectPath)!;
         var startupDirectory = Path.GetDirectoryName(input.StartupProjectPath)!;
@@ -640,7 +725,8 @@ public static class EfMigrationTools
         psi.Environment["DOTNET_NOLOGO"] = "1";
         psi.Environment["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
 
-        using var process = Process.Start(psi) ?? throw new InvalidOperationException("dotnet-ef process failed to start.");
+        using var process = Process.Start(psi)
+            ?? throw new InvalidOperationException("dotnet-ef process failed to start.");
         var stdoutTask = process.StandardOutput.ReadToEndAsync();
         var stderrTask = process.StandardError.ReadToEndAsync();
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
@@ -668,13 +754,15 @@ public static class EfMigrationTools
             {
             }
 
-            throw new TimeoutException($"dotnet-ef operation exceeded {timeoutSeconds} seconds.");
+            throw new TimeoutException(
+                $"dotnet-ef operation exceeded {timeoutSeconds} seconds.");
         }
 
         var stdout = stdoutTask.GetAwaiter().GetResult();
         var stderr = stderrTask.GetAwaiter().GetResult();
         if (stdout.Length > MaxEfOutputChars || stderr.Length > MaxEfOutputChars)
-            throw new InvalidDataException("dotnet-ef output exceeded the fixed safe output limit.");
+            throw new InvalidDataException(
+                "dotnet-ef output exceeded the fixed safe output limit.");
 
         return new EfProcessResult(process.ExitCode, stdout, stderr);
     }
@@ -683,7 +771,8 @@ public static class EfMigrationTools
     {
         var text = (stdout ?? string.Empty).Trim().TrimStart('\uFEFF');
         if (text.Length == 0)
-            throw new InvalidDataException("dotnet-ef returned empty stdout instead of JSON.");
+            throw new InvalidDataException(
+                "dotnet-ef returned empty stdout instead of JSON.");
 
         if (IsCompleteJsonArray(text))
             return text;
@@ -704,7 +793,8 @@ public static class EfMigrationTools
                 return candidate;
         }
 
-        throw new InvalidDataException($"dotnet-ef did not return one complete top-level JSON migration array. stdout: {Truncate(text, 4000)}");
+        throw new InvalidDataException(
+            $"dotnet-ef did not return one complete top-level JSON migration array. stdout: {Truncate(text, 4000)}");
     }
 
     private static bool IsCompleteJsonArray(string candidate)
@@ -724,20 +814,31 @@ public static class EfMigrationTools
     {
         foreach (var property in element.EnumerateObject())
         {
-            if (string.Equals(property.Name, propertyName, StringComparison.OrdinalIgnoreCase) &&
-                property.Value.ValueKind == JsonValueKind.String)
+            if (string.Equals(
+                    property.Name,
+                    propertyName,
+                    StringComparison.OrdinalIgnoreCase)
+                && property.Value.ValueKind == JsonValueKind.String)
                 return property.Value.GetString()
-                    ?? throw new InvalidDataException($"EF migration JSON property {propertyName} is null.");
+                    ?? throw new InvalidDataException(
+                        $"EF migration JSON property {propertyName} is null.");
         }
 
-        throw new InvalidDataException($"EF migration JSON property {propertyName} is missing.");
+        throw new InvalidDataException(
+            $"EF migration JSON property {propertyName} is missing.");
     }
 
-    private static bool TryGetJsonBoolean(JsonElement element, string propertyName, out bool value)
+    private static bool TryGetJsonBoolean(
+        JsonElement element,
+        string propertyName,
+        out bool value)
     {
         foreach (var property in element.EnumerateObject())
         {
-            if (!string.Equals(property.Name, propertyName, StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(
+                    property.Name,
+                    propertyName,
+                    StringComparison.OrdinalIgnoreCase))
                 continue;
             if (property.Value.ValueKind is JsonValueKind.True or JsonValueKind.False)
             {
@@ -750,7 +851,9 @@ public static class EfMigrationTools
         return false;
     }
 
-    private static EfMigrationListResult ToListResult(EfValidatedInput input, EfMigrationSnapshot snapshot)
+    private static EfMigrationListResult ToListResult(
+        EfValidatedInput input,
+        EfMigrationSnapshot snapshot)
         => new(
             input.ProjectPath,
             input.StartupProjectPath,
@@ -758,8 +861,28 @@ public static class EfMigrationTools
             input.Configuration,
             input.Environment,
             input.Profile.DatabaseIdentity,
+            "ok",
+            true,
             snapshot.Migrations.ToArray(),
             snapshot.FingerprintSha256,
+            null,
+            DateTimeOffset.UtcNow);
+
+    private static EfMigrationListResult ToUnavailableListResult(
+        EfValidatedInput input,
+        string? failureReason)
+        => new(
+            input.ProjectPath,
+            input.StartupProjectPath,
+            input.ContextName,
+            input.Configuration,
+            input.Environment,
+            input.Profile.DatabaseIdentity,
+            "database-unavailable",
+            false,
+            Array.Empty<EfMigrationEntry>(),
+            null,
+            failureReason,
             DateTimeOffset.UtcNow);
 
     private static EfValidatedInput ReadInputFromPlan(SignedPlan plan)
@@ -779,7 +902,9 @@ public static class EfMigrationTools
             RequireParameter(plan, "dotnetEfExeSha256"),
             RequireParameter(plan, "dotnetEfPayloadSha256"));
 
-    private static void RequireIdentityMatch(EfExecutionIdentity expected, EfExecutionIdentity current)
+    private static void RequireIdentityMatch(
+        EfExecutionIdentity expected,
+        EfExecutionIdentity current)
     {
         if (!string.Equals(expected.ProjectSha256, current.ProjectSha256, StringComparison.OrdinalIgnoreCase)
             || !string.Equals(expected.StartupProjectSha256, current.StartupProjectSha256, StringComparison.OrdinalIgnoreCase)
@@ -787,7 +912,8 @@ public static class EfMigrationTools
             || !string.Equals(expected.StartupBuildFingerprintSha256, current.StartupBuildFingerprintSha256, StringComparison.OrdinalIgnoreCase)
             || !string.Equals(expected.DotnetEfExeSha256, current.DotnetEfExeSha256, StringComparison.OrdinalIgnoreCase)
             || !string.Equals(expected.DotnetEfPayloadSha256, current.DotnetEfPayloadSha256, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("EF project/startup/build/tool identity changed during the typed EF operation.");
+            throw new InvalidOperationException(
+                "EF project/startup/build/tool identity changed during the typed EF operation.");
     }
 
     private static void RequireIntentMatch(
@@ -802,18 +928,27 @@ public static class EfMigrationTools
             || !string.Equals(plan.Operation, operation, StringComparison.Ordinal)
             || !string.Equals(plan.Target, target, StringComparison.Ordinal)
             || !string.Equals(plan.Summary, summary, StringComparison.Ordinal)
-            || !string.Equals(plan.RiskClass.ToString(), riskClass, StringComparison.OrdinalIgnoreCase))
+            || !string.Equals(
+                plan.RiskClass.ToString(),
+                riskClass,
+                StringComparison.OrdinalIgnoreCase))
             throw new UnauthorizedAccessException("Plan execution intent mismatch.");
     }
 
     private static string RequireParameter(SignedPlan plan, string key)
-        => plan.Parameters.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value)
-            ? value
-            : throw new InvalidDataException($"Signed EF parameter {key} is required.");
+        => plan.Parameters.TryGetValue(key, out var value)
+            && !string.IsNullOrWhiteSpace(value)
+                ? value
+                : throw new InvalidDataException(
+                    $"Signed EF parameter {key} is required.");
 
     private static string Sha256File(string path)
     {
-        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read);
         return Convert.ToHexString(SHA256.HashData(stream));
     }
 
@@ -859,8 +994,11 @@ public sealed record EfMigrationListResult(
     string Configuration,
     string Environment,
     string DatabaseIdentity,
+    string Status,
+    bool DatabaseAvailable,
     IReadOnlyList<EfMigrationEntry> Migrations,
-    string StateFingerprintSha256,
+    string? StateFingerprintSha256,
+    string? FailureReason,
     DateTimeOffset CheckedUtc);
 
 public sealed record EfMigrationStatusResult(
