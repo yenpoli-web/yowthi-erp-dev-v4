@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Security.Cryptography;
@@ -12,7 +12,31 @@ namespace YowThi.DevelopmentAgent3.Processes;
 [McpServerToolType]
 public static class ManagedProcessTools
 {
-    private sealed record ManagedProcessEntry(string JobId, int ProcessId, string ProcessName, Process Process, DateTimeOffset StartedUtc);
+    private sealed class ManagedProcessEntry
+    {
+        public required string JobId { get; init; }
+        public required string Executable { get; init; }
+        public required string Arguments { get; init; }
+        public required string WorkingDirectory { get; init; }
+        public required int ProcessId { get; init; }
+        public required string ProcessName { get; init; }
+        public required Process Process { get; init; }
+        public required DateTimeOffset ProcessStartUtc { get; init; }
+        public required DateTimeOffset StartedUtc { get; init; }
+        public object Gate { get; } = new();
+        public StringBuilder StdOut { get; } = new();
+        public StringBuilder StdErr { get; } = new();
+        public TaskCompletionSource<bool> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool StdOutTruncated { get; set; }
+        public bool StdErrTruncated { get; set; }
+        public bool Cancelled { get; set; }
+        public int? ExitCode { get; set; }
+        public DateTimeOffset? CompletedUtc { get; set; }
+        public string? Failure { get; set; }
+    }
+
+    private const int MaxOutputChars = 1_000_000;
+    private const int MaxRetainedJobs = 128;
 
     private static readonly byte[] SigningKey = SHA256.HashData(Encoding.UTF8.GetBytes("YowThi-Agent3-Development-Key-v1"));
     private static readonly PlanSigner Signer = new(SigningKey);
@@ -21,7 +45,7 @@ public static class ManagedProcessTools
     private static readonly ConcurrentDictionary<string, ManagedProcessEntry> Managed = new(StringComparer.Ordinal);
 
     [McpServerTool(Name="managed_process_start_plan", ReadOnly=false, Destructive=false, OpenWorld=false)]
-    [Description("Prepare a one-time signed plan to start one Agent-owned local process using the native .NET Process API. The process receives an Agent job ID and can later be cancelled only through that job ID. No PowerShell, cmd, or generic command executor is used.")]
+    [Description("Prepare a one-time signed plan to start one Agent-owned local process using the native .NET Process API. The process receives an Agent job ID and can later be inspected through managed_process_status or cancelled through that job ID. No PowerShell, cmd, or generic command executor is used.")]
     public static SignedPlan ManagedProcessStartPlan(string executable, string arguments = "", string? workingDirectory = null)
     {
         if (string.IsNullOrWhiteSpace(executable)) throw new ArgumentException("Executable is required.", nameof(executable));
@@ -60,7 +84,7 @@ public static class ManagedProcessTools
     }
 
     [McpServerTool(Name="managed_process_start_execute", ReadOnly=false, Destructive=false, OpenWorld=false)]
-    [Description("Execute one previously prepared managed-process start plan using the native .NET Process API and register the started process under its signed Agent job ID. The caller must repeat the signed operation, target, summary, and risk class. No PowerShell, cmd, or generic command executor is used.")]
+    [Description("Execute one previously prepared managed-process start plan using the native .NET Process API, capture bounded UTF-8 stdout/stderr, and register the process under its signed Agent job ID. The caller must repeat the signed operation, target, summary, and risk class. Use managed_process_status for completion state, exit code, stdout, stderr, and timestamps. No PowerShell, cmd, or generic command executor is used.")]
     public static ExecutionResult ManagedProcessStartExecute(string planId, string approvalCode, string operation, string target, string summary, string riskClass)
     {
         var plan = Store.GetValidated(planId, approvalCode);
@@ -71,59 +95,117 @@ public static class ManagedProcessTools
         var arguments = RequireParameter(plan, "arguments");
         var workingDirectory = RequireParameter(plan, "workingDirectory");
 
+        if (!File.Exists(executable)) throw new FileNotFoundException("Executable no longer exists.", executable);
+        if (!Directory.Exists(workingDirectory)) throw new DirectoryNotFoundException(workingDirectory);
+        CleanupCompletedJobs();
+        if (Managed.ContainsKey(jobId)) throw new InvalidOperationException("Managed job ID already exists.");
+
         var startInfo = new ProcessStartInfo
         {
             FileName = executable,
             Arguments = arguments,
             WorkingDirectory = workingDirectory,
             UseShellExecute = false,
-            CreateNoWindow = true
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8
         };
 
-        var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Process start returned null.");
-        var entry = new ManagedProcessEntry(jobId, process.Id, process.ProcessName, process, DateTimeOffset.UtcNow);
+        var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
+        if (!process.Start()) throw new InvalidOperationException("Process start returned false.");
+
+        var startedUtc = DateTimeOffset.UtcNow;
+        var processStartUtc = new DateTimeOffset(process.StartTime.ToUniversalTime(), TimeSpan.Zero);
+        var entry = new ManagedProcessEntry
+        {
+            JobId = jobId,
+            Executable = executable,
+            Arguments = arguments,
+            WorkingDirectory = workingDirectory,
+            ProcessId = process.Id,
+            ProcessName = process.ProcessName,
+            Process = process,
+            ProcessStartUtc = processStartUtc,
+            StartedUtc = startedUtc
+        };
+
+        process.OutputDataReceived += (_, e) => { if (e.Data is not null) AppendOutput(entry, entry.StdOut, e.Data, false); };
+        process.ErrorDataReceived += (_, e) => { if (e.Data is not null) AppendOutput(entry, entry.StdErr, e.Data, true); };
+
         if (!Managed.TryAdd(jobId, entry))
         {
             try { process.Kill(entireProcessTree: true); } catch { }
+            process.Dispose();
             throw new InvalidOperationException("Managed job ID already exists.");
         }
 
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+        _ = MonitorProcessAsync(entry);
+
         Store.Consume(planId);
         var outcome = $"started-job:{jobId};pid={process.Id};name={process.ProcessName}";
-        Audit.Append(plan.Tool, plan.Operation, plan.Target, new { plan.PlanId, jobId, processId = process.Id, outcome }, "executed");
+        Audit.Append(plan.Tool, plan.Operation, plan.Target, new { plan.PlanId, jobId, processId = process.Id, processStartUtc, outcome }, "executed");
         return new ExecutionResult(plan.PlanId, plan.Tool, plan.Operation, plan.Target, outcome, DateTimeOffset.UtcNow);
     }
 
+    [McpServerTool(Name="managed_process_status", ReadOnly=true, Destructive=false, OpenWorld=false)]
+    [Description("Read one retained Agent-owned managed process job by job ID. The result includes running/completion state, process identity, exit code when available, bounded UTF-8 stdout/stderr, truncation flags, cancellation state, timestamps, and monitor failure if any. This is read-only and does not start, stop, or modify a process.")]
+    public static ManagedProcessStatus ManagedProcessStatus(string jobId)
+    {
+        var entry = GetJob(jobId);
+        lock (entry.Gate)
+        {
+            return new ManagedProcessStatus(
+                entry.JobId,
+                entry.ProcessId,
+                entry.ProcessName,
+                GetState(entry),
+                entry.ExitCode,
+                entry.Cancelled,
+                entry.StdOut.ToString(),
+                entry.StdErr.ToString(),
+                entry.StdOutTruncated,
+                entry.StdErrTruncated,
+                entry.ProcessStartUtc,
+                entry.StartedUtc,
+                entry.CompletedUtc,
+                entry.Failure);
+        }
+    }
+
     [McpServerTool(Name="managed_process_cancel_plan", ReadOnly=false, Destructive=false, OpenWorld=false)]
-    [Description("Prepare a one-time signed plan to cancel one process previously started and still tracked by this Agent, identified only by Agent job ID. Arbitrary PIDs are not accepted. No PowerShell, cmd, or generic command executor is used.")]
+    [Description("Prepare a one-time signed plan to cancel one active process previously started and still retained by this Agent, identified only by Agent job ID. Completed jobs remain available through managed_process_status and cannot be cancelled. Arbitrary PIDs are not accepted. No PowerShell, cmd, or generic command executor is used.")]
     public static SignedPlan ManagedProcessCancelPlan(string jobId)
     {
-        if (string.IsNullOrWhiteSpace(jobId)) throw new ArgumentException("Job ID is required.", nameof(jobId));
-        if (!Managed.TryGetValue(jobId, out var entry)) throw new KeyNotFoundException("Managed job ID is not active in this Agent instance.");
-        if (entry.Process.HasExited)
+        var entry = GetJob(jobId);
+        lock (entry.Gate)
         {
-            Managed.TryRemove(jobId, out _);
-            throw new InvalidOperationException("Managed process has already exited.");
-        }
+            if (entry.CompletedUtc is not null || entry.Process.HasExited)
+                throw new InvalidOperationException("Managed process has already completed.");
 
-        var now = DateTimeOffset.UtcNow;
-        var planId = Guid.NewGuid().ToString("N");
-        var approvalCode = Convert.ToHexString(RandomNumberGenerator.GetBytes(6));
-        var parameters = new Dictionary<string,string>(StringComparer.Ordinal)
-        {
-            ["jobId"] = jobId,
-            ["processId"] = entry.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            ["processName"] = entry.ProcessName
-        };
-        var unsigned = new SignedPlan(1, planId, approvalCode, "managed-process", "managed-process-cancel", jobId, parameters, RiskClass.Medium, $"Cancel Agent-owned managed job {jobId} ({entry.ProcessName}, PID {entry.ProcessId})", now, now.AddMinutes(10), string.Empty);
-        var signed = unsigned with { Signature = Signer.Sign(unsigned) };
-        Store.Add(signed);
-        Audit.Append(signed.Tool, signed.Operation, signed.Target, new { signed.PlanId, jobId, entry.ProcessId, signed.RiskClass, signed.Summary }, "prepared");
-        return signed;
+            var now = DateTimeOffset.UtcNow;
+            var planId = Guid.NewGuid().ToString("N");
+            var approvalCode = Convert.ToHexString(RandomNumberGenerator.GetBytes(6));
+            var parameters = new Dictionary<string,string>(StringComparer.Ordinal)
+            {
+                ["jobId"] = jobId,
+                ["processId"] = entry.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["processName"] = entry.ProcessName,
+                ["processStartUtc"] = entry.ProcessStartUtc.ToString("O", System.Globalization.CultureInfo.InvariantCulture)
+            };
+            var unsigned = new SignedPlan(1, planId, approvalCode, "managed-process", "managed-process-cancel", jobId, parameters, RiskClass.Medium, $"Cancel Agent-owned managed job {jobId} ({entry.ProcessName}, PID {entry.ProcessId})", now, now.AddMinutes(10), string.Empty);
+            var signed = unsigned with { Signature = Signer.Sign(unsigned) };
+            Store.Add(signed);
+            Audit.Append(signed.Tool, signed.Operation, signed.Target, new { signed.PlanId, jobId, entry.ProcessId, entry.ProcessStartUtc, signed.RiskClass, signed.Summary }, "prepared");
+            return signed;
+        }
     }
 
     [McpServerTool(Name="managed_process_cancel_execute", ReadOnly=false, Destructive=false, OpenWorld=false)]
-    [Description("Execute one previously prepared managed-process cancel plan. Only the Agent-owned process currently registered under the signed job ID can be cancelled; arbitrary PID termination is not supported. The caller must repeat the signed operation, target, summary, and risk class. No PowerShell, cmd, or generic command executor is used.")]
+    [Description("Execute one previously prepared managed-process cancel plan. Only the exact active Agent-owned job still matching the sealed job ID, PID, process name, and process start time can be terminated. The completed cancelled job remains retained for managed_process_status read-back. Arbitrary PID termination is not supported. No PowerShell, cmd, or generic command executor is used.")]
     public static async Task<ExecutionResult> ManagedProcessCancelExecute(string planId, string approvalCode, string operation, string target, string summary, string riskClass)
     {
         var plan = Store.GetValidated(planId, approvalCode);
@@ -132,19 +214,28 @@ public static class ManagedProcessTools
         var jobId = RequireParameter(plan, "jobId");
         var expectedProcessIdText = RequireParameter(plan, "processId");
         var expectedProcessName = RequireParameter(plan, "processName");
+        var expectedProcessStartUtcText = RequireParameter(plan, "processStartUtc");
         if (!int.TryParse(expectedProcessIdText, out var expectedProcessId)) throw new InvalidDataException("Signed processId is invalid.");
-        if (!Managed.TryGetValue(jobId, out var entry)) throw new KeyNotFoundException("Managed job ID is not active in this Agent instance.");
-        if (entry.ProcessId != expectedProcessId || !string.Equals(entry.ProcessName, expectedProcessName, StringComparison.Ordinal))
-            throw new UnauthorizedAccessException("Managed process identity no longer matches the signed plan.");
+        if (!DateTimeOffset.TryParse(expectedProcessStartUtcText, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind, out var expectedProcessStartUtc))
+            throw new InvalidDataException("Signed processStartUtc is invalid.");
+
+        var entry = GetJob(jobId);
+        lock (entry.Gate)
+        {
+            if (entry.ProcessId != expectedProcessId ||
+                !string.Equals(entry.ProcessName, expectedProcessName, StringComparison.Ordinal) ||
+                entry.ProcessStartUtc != expectedProcessStartUtc)
+                throw new UnauthorizedAccessException("Managed process identity no longer matches the signed plan.");
+            if (entry.CompletedUtc is not null || entry.Process.HasExited)
+                throw new InvalidOperationException("Managed process has already completed.");
+            entry.Cancelled = true;
+        }
 
         try
         {
-            if (!entry.Process.HasExited)
-            {
-                entry.Process.Kill(entireProcessTree: true);
-                await entry.Process.WaitForExitAsync();
-            }
-            Managed.TryRemove(jobId, out _);
+            entry.Process.Kill(entireProcessTree: true);
+            await entry.Process.WaitForExitAsync();
+            await entry.Completion.Task.WaitAsync(TimeSpan.FromSeconds(10));
             Store.Consume(planId);
             var outcome = $"cancelled-job:{jobId};pid={entry.ProcessId}";
             Audit.Append(plan.Tool, plan.Operation, plan.Target, new { plan.PlanId, jobId, entry.ProcessId, outcome }, "executed");
@@ -154,6 +245,92 @@ public static class ManagedProcessTools
         {
             Audit.Append(plan.Tool, plan.Operation, plan.Target, new { plan.PlanId, jobId, error = ex.Message }, "failed");
             throw;
+        }
+    }
+
+    private static async Task MonitorProcessAsync(ManagedProcessEntry entry)
+    {
+        try
+        {
+            await entry.Process.WaitForExitAsync();
+            try { entry.Process.WaitForExit(); } catch { }
+            lock (entry.Gate)
+            {
+                entry.ExitCode = entry.Process.ExitCode;
+                entry.CompletedUtc = DateTimeOffset.UtcNow;
+            }
+            Audit.Append("managed-process", "managed-process-complete", entry.JobId, new { entry.JobId, entry.ProcessId, entry.ExitCode, entry.Cancelled }, entry.Cancelled ? "cancelled" : entry.ExitCode == 0 ? "completed" : "failed");
+        }
+        catch (Exception ex)
+        {
+            lock (entry.Gate)
+            {
+                entry.Failure = ex.Message;
+                entry.CompletedUtc = DateTimeOffset.UtcNow;
+                try { if (entry.Process.HasExited) entry.ExitCode = entry.Process.ExitCode; } catch { }
+            }
+            Audit.Append("managed-process", "managed-process-complete", entry.JobId, new { entry.JobId, entry.ProcessId, error = ex.Message }, "failed");
+        }
+        finally
+        {
+            entry.Completion.TrySetResult(true);
+        }
+    }
+
+    private static void AppendOutput(ManagedProcessEntry entry, StringBuilder target, string value, bool isError)
+    {
+        lock (entry.Gate)
+        {
+            var remaining = MaxOutputChars - target.Length;
+            if (remaining <= 0)
+            {
+                if (isError) entry.StdErrTruncated = true; else entry.StdOutTruncated = true;
+                return;
+            }
+
+            var text = value + Environment.NewLine;
+            if (text.Length <= remaining)
+            {
+                target.Append(text);
+            }
+            else
+            {
+                target.Append(text.AsSpan(0, remaining));
+                if (isError) entry.StdErrTruncated = true; else entry.StdOutTruncated = true;
+            }
+        }
+    }
+
+    private static ManagedProcessEntry GetJob(string jobId)
+    {
+        if (string.IsNullOrWhiteSpace(jobId)) throw new ArgumentException("Job ID is required.", nameof(jobId));
+        if (!Managed.TryGetValue(jobId.Trim(), out var entry)) throw new KeyNotFoundException("Managed job ID is not retained in this Agent instance.");
+        return entry;
+    }
+
+    private static string GetState(ManagedProcessEntry entry)
+    {
+        if (entry.CompletedUtc is null) return "Running";
+        if (entry.Cancelled) return "Cancelled";
+        if (!string.IsNullOrWhiteSpace(entry.Failure)) return "Failed";
+        return entry.ExitCode == 0 ? "Succeeded" : "Failed";
+    }
+
+    private static void CleanupCompletedJobs()
+    {
+        if (Managed.Count <= MaxRetainedJobs) return;
+        var removable = Managed.Values
+            .Where(x => x.CompletedUtc is not null)
+            .OrderBy(x => x.CompletedUtc)
+            .Take(Math.Max(0, Managed.Count - MaxRetainedJobs))
+            .Select(x => x.JobId)
+            .ToArray();
+        foreach (var jobId in removable)
+        {
+            if (Managed.TryRemove(jobId, out var entry))
+            {
+                try { entry.Process.Dispose(); } catch { }
+            }
         }
     }
 
@@ -174,3 +351,19 @@ public static class ManagedProcessTools
             throw new UnauthorizedAccessException("Plan execution intent mismatch.");
     }
 }
+
+public sealed record ManagedProcessStatus(
+    string JobId,
+    int ProcessId,
+    string ProcessName,
+    string State,
+    int? ExitCode,
+    bool Cancelled,
+    string StdOut,
+    string StdErr,
+    bool StdOutTruncated,
+    bool StdErrTruncated,
+    DateTimeOffset ProcessStartUtc,
+    DateTimeOffset StartedUtc,
+    DateTimeOffset? CompletedUtc,
+    string? Failure);
