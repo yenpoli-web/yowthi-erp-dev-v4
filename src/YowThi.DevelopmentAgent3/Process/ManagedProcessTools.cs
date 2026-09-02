@@ -44,14 +44,39 @@ public static class ManagedProcessTools
     private static readonly AuditChain Audit = new(@"C:\Dev\YowThi-ERP-Dev-v4\.agent3-audit");
     private static readonly ConcurrentDictionary<string, ManagedProcessEntry> Managed = new(StringComparer.Ordinal);
 
+    private static readonly HashSet<string> BlockedExecutableNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "git.exe", "gh.exe", "git-bash.exe", "git-cmd.exe",
+        "git-credential-manager.exe", "git-credential-manager-core.exe",
+        "cmd.exe", "powershell.exe", "pwsh.exe", "bash.exe", "sh.exe", "wsl.exe"
+    };
+
+    private static readonly string[] BlockedIdentitySeedPaths =
+    [
+        @"C:\Program Files\Git\cmd\git.exe",
+        @"C:\Program Files\Git\bin\git.exe",
+        @"C:\Program Files\Git\git-bash.exe",
+        @"C:\Program Files\Git\git-cmd.exe",
+        @"C:\Program Files\GitHub CLI\gh.exe",
+        @"C:\Windows\System32\cmd.exe",
+        @"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        @"C:\Program Files\PowerShell\7\pwsh.exe",
+        @"C:\Windows\System32\wsl.exe"
+    ];
+
+    private static readonly Lazy<HashSet<string>> BlockedExecutableSha256 =
+        new(BuildBlockedExecutableSha256, System.Threading.LazyThreadSafetyMode.ExecutionAndPublication);
+
     [McpServerTool(Name="managed_process_start_plan", ReadOnly=false, Destructive=false, OpenWorld=false)]
-    [Description("Prepare a one-time signed plan to start one Agent-owned local process using the native .NET Process API. The process receives an Agent job ID and can later be inspected through managed_process_status or cancelled through that job ID. No PowerShell, cmd, or generic command executor is used.")]
+    [Description("Prepare a one-time signed plan to start one Agent-owned local process using the native .NET Process API. The executable SHA-256 is sealed and revalidated at execution. Direct Git/GitHub CLI, Git credential-helper, and shell-host execution is rejected; use typed Git/GitHub or dedicated script tools instead. The process receives an Agent job ID and can later be inspected through managed_process_status or cancelled through that job ID.")]
     public static SignedPlan ManagedProcessStartPlan(string executable, string arguments = "", string? workingDirectory = null)
     {
         if (string.IsNullOrWhiteSpace(executable)) throw new ArgumentException("Executable is required.", nameof(executable));
         if (!Path.IsPathFullyQualified(executable)) throw new ArgumentException("Executable path must be absolute.", nameof(executable));
         var executableFull = Path.GetFullPath(executable);
         if (!File.Exists(executableFull)) throw new FileNotFoundException("Executable does not exist.", executableFull);
+        if ((File.GetAttributes(executableFull) & FileAttributes.ReparsePoint) != 0) throw new UnauthorizedAccessException("Executable may not be a reparse point.");
+        var executableSha256 = RequireAllowedExecutable(executableFull);
 
         string workingDirectoryFull;
         if (string.IsNullOrWhiteSpace(workingDirectory))
@@ -73,6 +98,7 @@ public static class ManagedProcessTools
         {
             ["jobId"] = jobId,
             ["executable"] = executableFull,
+            ["executableSha256"] = executableSha256,
             ["arguments"] = arguments ?? string.Empty,
             ["workingDirectory"] = workingDirectoryFull
         };
@@ -84,7 +110,7 @@ public static class ManagedProcessTools
     }
 
     [McpServerTool(Name="managed_process_start_execute", ReadOnly=false, Destructive=false, OpenWorld=false)]
-    [Description("Execute one previously prepared managed-process start plan using the native .NET Process API, capture bounded UTF-8 stdout/stderr, and register the process under its signed Agent job ID. The caller must repeat the signed operation, target, summary, and risk class. Use managed_process_status for completion state, exit code, stdout, stderr, and timestamps. No PowerShell, cmd, or generic command executor is used.")]
+    [Description("Execute one previously prepared managed-process start plan using the native .NET Process API, revalidate the sealed executable SHA-256 and direct-executable policy, capture bounded UTF-8 stdout/stderr, and register the process under its signed Agent job ID. Direct Git/GitHub CLI, Git credential-helper, and shell-host execution is rejected. The caller must repeat the signed operation, target, summary, and risk class. Use managed_process_status for completion state, exit code, stdout, stderr, and timestamps.")]
     public static ExecutionResult ManagedProcessStartExecute(string planId, string approvalCode, string operation, string target, string summary, string riskClass)
     {
         var plan = Store.GetValidated(planId, approvalCode);
@@ -92,10 +118,15 @@ public static class ManagedProcessTools
 
         var jobId = RequireParameter(plan, "jobId");
         var executable = RequireParameter(plan, "executable");
+        var expectedExecutableSha256 = RequireParameter(plan, "executableSha256");
         var arguments = RequireParameter(plan, "arguments");
         var workingDirectory = RequireParameter(plan, "workingDirectory");
 
         if (!File.Exists(executable)) throw new FileNotFoundException("Executable no longer exists.", executable);
+        if ((File.GetAttributes(executable) & FileAttributes.ReparsePoint) != 0) throw new UnauthorizedAccessException("Executable may not be a reparse point.");
+        var actualExecutableSha256 = RequireAllowedExecutable(executable);
+        if (!string.Equals(actualExecutableSha256, expectedExecutableSha256, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Executable changed after plan creation.");
         if (!Directory.Exists(workingDirectory)) throw new DirectoryNotFoundException(workingDirectory);
         CleanupCompletedJobs();
         if (Managed.ContainsKey(jobId)) throw new InvalidOperationException("Managed job ID already exists.");
@@ -332,6 +363,42 @@ public static class ManagedProcessTools
                 try { entry.Process.Dispose(); } catch { }
             }
         }
+    }
+
+    private static string RequireAllowedExecutable(string executable)
+    {
+        var full = Path.GetFullPath(executable);
+        var fileName = Path.GetFileName(full);
+        if (BlockedExecutableNames.Contains(fileName))
+            throw new UnauthorizedAccessException("managed_process_start does not accept direct Git/GitHub CLI, Git credential-helper, or shell-host execution. Use typed Git/GitHub tools or dedicated script tools.");
+
+        var sha256 = GetFileSha256(full);
+        if (BlockedExecutableSha256.Value.Contains(sha256))
+            throw new UnauthorizedAccessException("managed_process_start rejected an executable whose binary identity matches a blocked Git/GitHub CLI or shell host. Use typed Git/GitHub tools or dedicated script tools.");
+        return sha256;
+    }
+
+    private static HashSet<string> BuildBlockedExecutableSha256()
+    {
+        var hashes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in BlockedIdentitySeedPaths)
+        {
+            try
+            {
+                if (!File.Exists(path)) continue;
+                if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0) continue;
+                hashes.Add(GetFileSha256(path));
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+        return hashes;
+    }
+
+    private static string GetFileSha256(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        return Convert.ToHexString(SHA256.HashData(stream));
     }
 
     private static string RequireParameter(SignedPlan plan, string name)
