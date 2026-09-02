@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Xml;
 using System.Xml.Linq;
@@ -41,6 +42,7 @@ public static class DotnetDevelopmentTools
     }
 
     private sealed record FingerprintSnapshot(string Sha256, int FileCount);
+    private sealed record MtpTestModulesSnapshot(string RootDirectory, string ModulesExpression, string ModulesSha256, int ModuleCount);
 
     private const int MaxOutputChars = 1_000_000;
     private const int MaxRetainedJobs = 128;
@@ -76,7 +78,7 @@ public static class DotnetDevelopmentTools
         => StartJob(planId, approvalCode, operation, target, summary, riskClass, "dotnet-restore");
 
     [McpServerTool(Name = "dotnet_test_plan", ReadOnly = false, Destructive = false, OpenWorld = false)]
-    [Description("Prepare a one-time signed plan to start one managed fixed dotnet test job for a .NET project or solution under the C:\\Dev development workspace root. The project/solution input fingerprint, fixed dotnet.exe SHA-256, exact Debug/Release build-output fingerprint, working directory, configuration, and timeout are sealed. Test execution is fixed to --no-restore --no-build so no build or dependency restore occurs after approval. Arbitrary test arguments, filters, loggers, environment variables, properties, paths outside C:\\Dev, and production paths are rejected.")]
+    [Description("Prepare a one-time signed plan to start one managed fixed dotnet test job for a .NET project or solution under the C:\\Dev development workspace root. The project/solution input fingerprint, fixed dotnet.exe SHA-256, exact Debug/Release build-output fingerprint, working directory, configuration, and timeout are sealed. Microsoft.Testing.Platform workspaces seal exact already-built test modules for fixed --test-modules execution; other test targets remain fixed to --no-restore --no-build. Arbitrary test arguments, filters, loggers, environment variables, properties, paths outside C:\\Dev, and production paths are rejected.")]
     public static SignedPlan DotnetTestPlan(string projectPath, string configuration = "Release", int timeoutSeconds = 600)
     {
         if (configuration is not ("Debug" or "Release"))
@@ -85,7 +87,7 @@ public static class DotnetDevelopmentTools
     }
 
     [McpServerTool(Name = "dotnet_test_execute", ReadOnly = false, Destructive = false, OpenWorld = false)]
-    [Description("Execute one previously prepared build/dotnet-test plan by starting an Agent-owned managed fixed dotnet test --configuration <sealed> --no-restore --no-build job. The project/solution input fingerprint, sealed build-output fingerprint, fixed dotnet.exe SHA-256, exact working directory, configuration, timeout, and signed intent are revalidated immediately before start. Output is captured as UTF-8 with fixed en-US CLI language. No build or restore is performed.")]
+    [Description("Execute one previously prepared build/dotnet-test plan. Microsoft.Testing.Platform plans run only the sealed already-built modules through fixed dotnet test --test-modules/--root-directory semantics; other plans use fixed --configuration <sealed> --no-restore --no-build semantics. Project/solution inputs, build outputs, module identities when applicable, dotnet.exe, working directory, timeout, and signed intent are revalidated immediately before start. Output is captured as UTF-8 with fixed en-US CLI language. No build or restore is performed.")]
     public static DotnetJobStartResult DotnetTestExecute(string planId, string approvalCode, string operation, string target, string summary, string riskClass)
         => StartJob(planId, approvalCode, operation, target, summary, riskClass, "dotnet-test");
 
@@ -208,10 +210,12 @@ public static class DotnetDevelopmentTools
         var workingDirectory = Path.GetDirectoryName(project) ?? throw new InvalidOperationException("Project working directory could not be resolved.");
         var inputFingerprint = ComputeInputFingerprint(project);
         FingerprintSnapshot? buildFingerprint = null;
+        MtpTestModulesSnapshot? mtpModules = null;
         if (operation == "dotnet-test")
         {
             if (configuration is null) throw new InvalidDataException("Test configuration is required.");
             buildFingerprint = ComputeBuildFingerprint(project, configuration);
+            mtpModules = TryResolveMtpTestModules(project, configuration);
         }
 
         var now = DateTimeOffset.UtcNow;
@@ -232,6 +236,17 @@ public static class DotnetDevelopmentTools
         {
             parameters["buildFingerprintSha256"] = buildFingerprint.Sha256;
             parameters["buildFileCount"] = buildFingerprint.FileCount.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+        if (operation == "dotnet-test")
+        {
+            parameters["testExecutionMode"] = mtpModules is null ? "standard" : "mtp-test-modules";
+            if (mtpModules is not null)
+            {
+                parameters["testModulesRoot"] = mtpModules.RootDirectory;
+                parameters["testModulesExpression"] = mtpModules.ModulesExpression;
+                parameters["testModulesSha256"] = mtpModules.ModulesSha256;
+                parameters["testModuleCount"] = mtpModules.ModuleCount.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            }
         }
 
         var summary = operation == "dotnet-restore"
@@ -273,6 +288,8 @@ public static class DotnetDevelopmentTools
 
         string? configuration = null;
         FingerprintSnapshot? buildFingerprint = null;
+        MtpTestModulesSnapshot? mtpModules = null;
+        var testExecutionMode = "standard";
         if (expectedOperation == "dotnet-test")
         {
             configuration = RequireParameter(plan, "configuration");
@@ -282,6 +299,22 @@ public static class DotnetDevelopmentTools
             if (!string.Equals(RequireParameter(plan, "buildFingerprintSha256"), buildFingerprint.Sha256, StringComparison.OrdinalIgnoreCase) ||
                 !int.TryParse(RequireParameter(plan, "buildFileCount"), out var expectedBuildCount) || expectedBuildCount != buildFingerprint.FileCount)
                 throw new InvalidOperationException("Built test artifacts changed after plan preparation.");
+
+            testExecutionMode = RequireParameter(plan, "testExecutionMode");
+            if (string.Equals(testExecutionMode, "mtp-test-modules", StringComparison.Ordinal))
+            {
+                mtpModules = TryResolveMtpTestModules(project, configuration)
+                    ?? throw new InvalidOperationException("Microsoft.Testing.Platform module execution is no longer applicable to this target.");
+                if (!string.Equals(RequireParameter(plan, "testModulesRoot"), mtpModules.RootDirectory, StringComparison.OrdinalIgnoreCase) ||
+                    !string.Equals(RequireParameter(plan, "testModulesExpression"), mtpModules.ModulesExpression, StringComparison.Ordinal) ||
+                    !string.Equals(RequireParameter(plan, "testModulesSha256"), mtpModules.ModulesSha256, StringComparison.OrdinalIgnoreCase) ||
+                    !int.TryParse(RequireParameter(plan, "testModuleCount"), out var expectedModuleCount) || expectedModuleCount != mtpModules.ModuleCount)
+                    throw new InvalidOperationException("Sealed Microsoft.Testing.Platform test modules changed after plan preparation.");
+            }
+            else if (!string.Equals(testExecutionMode, "standard", StringComparison.Ordinal))
+            {
+                throw new InvalidDataException("testExecutionMode parameter is invalid.");
+            }
         }
 
         var psi = new ProcessStartInfo
@@ -299,15 +332,26 @@ public static class DotnetDevelopmentTools
         psi.Environment["DOTNET_NOLOGO"] = "1";
         psi.Environment["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
         psi.ArgumentList.Add(expectedOperation == "dotnet-restore" ? "restore" : "test");
-        psi.ArgumentList.Add(project);
 
         if (expectedOperation == "dotnet-restore")
         {
+            psi.ArgumentList.Add(project);
             psi.ArgumentList.Add("--nologo");
             psi.ArgumentList.Add("--no-cache");
         }
+        else if (string.Equals(testExecutionMode, "mtp-test-modules", StringComparison.Ordinal))
+        {
+            psi.WorkingDirectory = mtpModules!.RootDirectory;
+            psi.ArgumentList.Add("--test-modules");
+            psi.ArgumentList.Add(mtpModules.ModulesExpression);
+            psi.ArgumentList.Add("--root-directory");
+            psi.ArgumentList.Add(mtpModules.RootDirectory);
+            psi.ArgumentList.Add("--no-ansi");
+            psi.ArgumentList.Add("--no-progress");
+        }
         else
         {
+            psi.ArgumentList.Add(project);
             psi.ArgumentList.Add("--configuration");
             psi.ArgumentList.Add(configuration!);
             psi.ArgumentList.Add("--no-restore");
@@ -365,6 +409,102 @@ public static class DotnetDevelopmentTools
             if (File.Exists(lockFile)) files.Add(Path.GetFullPath(lockFile));
         }
         return FingerprintFiles(files);
+    }
+
+    private static MtpTestModulesSnapshot? TryResolveMtpTestModules(string target, string configuration)
+    {
+        var rootDirectory = FindMicrosoftTestingPlatformRoot(Path.GetDirectoryName(target)!);
+        if (rootDirectory is null) return null;
+
+        var graphInputs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var projects = CollectProjectGraph(target, graphInputs);
+        var testProjects = projects.Where(IsStaticTestProject).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray();
+        if (testProjects.Length == 0) return null;
+
+        var modules = new List<string>();
+        foreach (var testProject in testProjects)
+        {
+            var projectDirectory = Path.GetDirectoryName(testProject)!;
+            var buildRoot = Path.Combine(projectDirectory, "bin", configuration);
+            if (!Directory.Exists(buildRoot))
+                throw new DirectoryNotFoundException($"Built output directory does not exist for Microsoft.Testing.Platform test project: {buildRoot}");
+
+            var assemblyName = GetStaticAssemblyName(testProject);
+            var expectedFileName = assemblyName + ".dll";
+            var candidates = EnumerateTreeFilesNoReparse(buildRoot)
+                .Where(file => string.Equals(Path.GetFileName(file), expectedFileName, StringComparison.OrdinalIgnoreCase))
+                .Where(file => File.Exists(Path.Combine(Path.GetDirectoryName(file)!, assemblyName + ".runtimeconfig.json")))
+                .Where(file => File.Exists(Path.Combine(Path.GetDirectoryName(file)!, "Microsoft.Testing.Platform.dll")))
+                .OrderBy(file => file, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (candidates.Length == 0)
+                throw new InvalidOperationException($"No built Microsoft.Testing.Platform test module was found for {testProject}. Build the target before preparing dotnet_test_plan.");
+            modules.AddRange(candidates);
+        }
+
+        var exactModules = modules.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray();
+        var root = Path.GetFullPath(rootDirectory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var rootPrefix = root + Path.DirectorySeparatorChar;
+        var relativeModules = new List<string>(exactModules.Length);
+        foreach (var module in exactModules)
+        {
+            var full = Path.GetFullPath(module);
+            if (!full.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase))
+                throw new UnauthorizedAccessException("Microsoft.Testing.Platform module is outside the sealed global.json root.");
+            var relative = Path.GetRelativePath(root, full).Replace('\\', '/');
+            if (relative.IndexOfAny([';', '[', ']']) >= 0)
+                throw new InvalidOperationException("Microsoft.Testing.Platform module path contains unsupported glob-expression characters.");
+            relativeModules.Add(relative);
+        }
+
+        var moduleFingerprint = FingerprintFiles(exactModules);
+        return new MtpTestModulesSnapshot(root, string.Join(';', relativeModules), moduleFingerprint.Sha256, exactModules.Length);
+    }
+
+    private static string? FindMicrosoftTestingPlatformRoot(string startDirectory)
+    {
+        var devRoot = Path.GetFullPath(DevRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var current = new DirectoryInfo(startDirectory);
+        while (current is not null && (string.Equals(current.FullName, devRoot, StringComparison.OrdinalIgnoreCase) || current.FullName.StartsWith(devRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)))
+        {
+            var globalJson = Path.Combine(current.FullName, "global.json");
+            if (File.Exists(globalJson))
+            {
+                RequireNoReparseTraversal(globalJson);
+                using var document = JsonDocument.Parse(File.ReadAllText(globalJson, Encoding.UTF8));
+                if (document.RootElement.TryGetProperty("test", out var testElement) &&
+                    testElement.ValueKind == JsonValueKind.Object &&
+                    testElement.TryGetProperty("runner", out var runnerElement) &&
+                    runnerElement.ValueKind == JsonValueKind.String &&
+                    string.Equals(runnerElement.GetString(), "Microsoft.Testing.Platform", StringComparison.Ordinal))
+                    return current.FullName;
+                return null;
+            }
+            if (string.Equals(current.FullName.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), devRoot, StringComparison.OrdinalIgnoreCase)) break;
+            current = current.Parent;
+        }
+        return null;
+    }
+
+    private static bool IsStaticTestProject(string projectPath)
+    {
+        var document = LoadXml(projectPath);
+        return document.Descendants()
+            .Where(x => string.Equals(x.Name.LocalName, "IsTestProject", StringComparison.OrdinalIgnoreCase))
+            .Any(x => string.Equals(x.Value.Trim(), "true", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string GetStaticAssemblyName(string projectPath)
+    {
+        var document = LoadXml(projectPath);
+        var value = document.Descendants()
+            .Where(x => string.Equals(x.Name.LocalName, "AssemblyName", StringComparison.OrdinalIgnoreCase))
+            .Select(x => x.Value.Trim())
+            .LastOrDefault(x => !string.IsNullOrWhiteSpace(x));
+        if (string.IsNullOrWhiteSpace(value)) return Path.GetFileNameWithoutExtension(projectPath);
+        if (value.Contains("$(", StringComparison.Ordinal) || value.IndexOfAny(['*', '?', ';']) >= 0)
+            throw new InvalidOperationException($"Dynamic or unsafe AssemblyName cannot be sealed for Microsoft.Testing.Platform execution: {value}");
+        return value;
     }
 
     private static FingerprintSnapshot ComputeBuildFingerprint(string target, string configuration)
