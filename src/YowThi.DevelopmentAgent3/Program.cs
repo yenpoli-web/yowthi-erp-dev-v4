@@ -1,5 +1,6 @@
 using ModelContextProtocol.AspNetCore;
 using ModelContextProtocol.Server;
+using YowThi.DevelopmentAgent3.Runtime;
 using YowThi.DevelopmentAgent3.Security;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -18,6 +19,21 @@ builder.Services.AddMcpServer()
     .WithTools<YowThi.DevelopmentAgent3.Postgres.PostgresMutationTools>();
 
 var app = builder.Build();
-app.MapGet("/health", () => Results.Ok(new { service = "YowThi Development Agent 3", version = "3.0.0-alpha.1", status = "ok", machine = Environment.MachineName, utc = DateTimeOffset.UtcNow }));
+app.MapGet("/health", () =>
+{
+    var registry = ToolRegistryIdentity.Current;
+    return Results.Ok(new
+    {
+        service = "YowThi Development Agent 3",
+        version = "3.0.0-alpha.1",
+        status = "ok",
+        machine = Environment.MachineName,
+        processId = registry.ProcessId,
+        runtimeSha256 = registry.RuntimeSha256,
+        toolCatalogCount = registry.ToolCount,
+        toolCatalogSha256 = registry.CatalogSha256,
+        utc = DateTimeOffset.UtcNow
+    });
+});
 app.MapMcp("/mcp");
 await app.RunAsync();
