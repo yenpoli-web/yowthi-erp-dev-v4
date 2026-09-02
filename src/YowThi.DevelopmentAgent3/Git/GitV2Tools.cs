@@ -412,6 +412,176 @@ public static class GitV2Tools
         }
     }
 
+    [McpServerTool(Name = "git_push_new_upstream_plan", ReadOnly = false, Destructive = false, OpenWorld = true)]
+    [Description("Prepare a one-time signed High-risk plan to publish the current clean m*-validation or p*-validation branch to a new same-name origin branch and configure that same-name upstream. The origin remote is fixed, must use credential-free HTTPS with the standard fetch refspec, and the remote branch must be absent both at plan time and immediately before execution. Current branch, HEAD, full status snapshot, remote configuration, remote absence, and fixed Git Credential Manager SHA-256 are sealed. Force, tags, arbitrary refspecs, arbitrary remotes, non-validation branches, and non-HTTPS transports are not supported.")]
+    public static async Task<SignedPlan> GitPushNewUpstreamPlan(string repository)
+    {
+        var repo = await ValidateRepositoryAsync(repository, requireMutable: true);
+        await RequireCleanWorkingTreeAsync(repo);
+
+        var currentBranch = await GetCurrentBranchAsync(repo);
+        if (string.IsNullOrWhiteSpace(currentBranch))
+            throw new InvalidOperationException("Git new-upstream push is not allowed from detached HEAD.");
+        await ValidateBranchNameAsync(repo, currentBranch);
+        RequireValidationBranchName(currentBranch);
+        await RequireNoConfiguredUpstreamAsync(repo, currentBranch);
+
+        const string remote = "origin";
+        ValidateRemoteName(remote);
+        var currentHead = await GetHeadAsync(repo);
+        var statusSha256 = await GetStatusSnapshotSha256Async(repo);
+        var remoteConfigSha256 = await GetSafeHttpsRemoteConfigSha256Async(repo, remote);
+        var credentialManagerSha256 = GetCredentialManagerSha256();
+        var remoteCommit = await GetRemoteBranchCommitAsync(repo, remote, currentBranch);
+        if (remoteCommit is not null)
+            throw new InvalidOperationException($"Remote branch already exists: {remote}/{currentBranch} at {remoteCommit[..12]}");
+
+        var parameters = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["repository"] = repo,
+            ["currentBranch"] = currentBranch,
+            ["currentHead"] = currentHead,
+            ["statusSha256"] = statusSha256,
+            ["remote"] = remote,
+            ["remoteBranch"] = currentBranch,
+            ["remoteBranchAbsent"] = "true",
+            ["remoteConfigSha256"] = remoteConfigSha256,
+            ["credentialManagerSha256"] = credentialManagerSha256
+        };
+        var summary = $"Publish validation branch {currentBranch} at {currentHead[..12]} to new same-name origin/{currentBranch} and configure upstream in {repo}";
+        return CreatePlan("git-push-new-upstream", repo, parameters, RiskClass.High, summary);
+    }
+
+    [McpServerTool(Name = "git_push_new_upstream_execute", ReadOnly = false, Destructive = false, OpenWorld = true)]
+    [Description("Execute one previously prepared git/git-push-new-upstream plan using a fixed non-force same-name refs/heads push to origin with --set-upstream. The exact validation branch, HEAD, clean status, absence of any configured upstream, remote branch absence, credential-free HTTPS origin configuration, standard fetch refspec, and fixed Git Credential Manager SHA-256 are revalidated immediately before push. Post-push read-back must prove the remote branch SHA equals the sealed local HEAD and the configured upstream is exactly origin/<same-name>. Force, tags, arbitrary refspecs, arbitrary remotes, and non-validation branches are not supported.")]
+    public static async Task<GitExecutionResult> GitPushNewUpstreamExecute(
+        string planId,
+        string approvalCode,
+        string operation,
+        string target,
+        string summary,
+        string riskClass)
+    {
+        var plan = Store.GetValidated(planId, approvalCode);
+        RequireIntentMatch(plan, "git-push-new-upstream", operation, target, summary, riskClass);
+        var repo = await ValidateRepositoryAsync(RequireParameter(plan, "repository"), requireMutable: true);
+        await RequireCleanWorkingTreeAsync(repo);
+
+        var expectedBranch = RequireParameter(plan, "currentBranch");
+        var expectedHead = RequireParameter(plan, "currentHead");
+        var expectedStatusSha256 = RequireParameter(plan, "statusSha256");
+        var expectedRemote = RequireParameter(plan, "remote");
+        var expectedRemoteBranch = RequireParameter(plan, "remoteBranch");
+        var expectedRemoteConfigSha256 = RequireParameter(plan, "remoteConfigSha256");
+        var expectedCredentialManagerSha256 = RequireParameter(plan, "credentialManagerSha256");
+        if (!string.Equals(RequireParameter(plan, "remoteBranchAbsent"), "true", StringComparison.Ordinal))
+            throw new InvalidDataException("Signed remote-branch absence state is invalid.");
+        if (!string.Equals(expectedRemote, "origin", StringComparison.Ordinal))
+            throw new UnauthorizedAccessException("New-upstream push remote must be origin.");
+
+        var actualBranch = await GetCurrentBranchAsync(repo);
+        if (string.IsNullOrWhiteSpace(actualBranch))
+            throw new InvalidOperationException("Git new-upstream push is not allowed from detached HEAD.");
+        await ValidateBranchNameAsync(repo, actualBranch);
+        RequireValidationBranchName(actualBranch);
+        await RequireNoConfiguredUpstreamAsync(repo, actualBranch);
+
+        var actualHead = await GetHeadAsync(repo);
+        var actualStatusSha256 = await GetStatusSnapshotSha256Async(repo);
+        var actualRemoteConfigSha256 = await GetSafeHttpsRemoteConfigSha256Async(repo, expectedRemote);
+        var actualCredentialManagerSha256 = GetCredentialManagerSha256();
+        var actualRemoteCommitBefore = await GetRemoteBranchCommitAsync(repo, expectedRemote, actualBranch);
+
+        if (!string.Equals(expectedBranch, actualBranch, StringComparison.Ordinal) ||
+            !string.Equals(expectedRemoteBranch, actualBranch, StringComparison.Ordinal) ||
+            !string.Equals(expectedHead, actualHead, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(expectedStatusSha256, actualStatusSha256, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(expectedRemoteConfigSha256, actualRemoteConfigSha256, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(expectedCredentialManagerSha256, actualCredentialManagerSha256, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Git new-upstream push state changed after plan creation.");
+        if (actualRemoteCommitBefore is not null)
+            throw new InvalidOperationException($"Remote branch appeared after plan creation: {expectedRemote}/{actualBranch} at {actualRemoteCommitBefore[..12]}");
+
+        var refspec = $"refs/heads/{actualBranch}:refs/heads/{actualBranch}";
+        try
+        {
+            var result = await RunGitAsync(
+                repo,
+                new[] { "push", "--porcelain", "--set-upstream", "--no-signed", "--no-follow-tags", "--recurse-submodules=no", expectedRemote, refspec },
+                300,
+                networkHttpsOnly: true);
+
+            var remoteHeadAfter = await GetRemoteBranchCommitAsync(repo, expectedRemote, actualBranch);
+            if (remoteHeadAfter is null || !string.Equals(remoteHeadAfter, actualHead, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Post-push remote branch SHA does not match the sealed local HEAD.");
+            var (upstreamRemote, upstreamBranch) = await GetSameNameUpstreamAsync(repo, actualBranch);
+            if (!string.Equals(upstreamRemote, expectedRemote, StringComparison.Ordinal) ||
+                !string.Equals(upstreamBranch, actualBranch, StringComparison.Ordinal))
+                throw new InvalidOperationException("Post-push upstream configuration is not the exact same-name origin branch.");
+
+            Store.Consume(planId);
+            Audit.Append(plan.Tool, plan.Operation, plan.Target, new
+            {
+                plan.PlanId,
+                actualBranch,
+                actualHead,
+                remote = expectedRemote,
+                refspec,
+                remoteHeadAfter,
+                result.ExitCode
+            }, "executed");
+            return new GitExecutionResult(plan.PlanId, plan.Operation, repo, $"{expectedRemote}/{actualBranch}@{remoteHeadAfter}", result.ExitCode, result.StdOut, result.StdErr, DateTimeOffset.UtcNow);
+        }
+        catch (Exception ex)
+        {
+            Audit.Append(plan.Tool, plan.Operation, plan.Target, new { plan.PlanId, actualBranch, error = ex.Message }, "failed");
+            throw;
+        }
+    }
+
+    private static void RequireValidationBranchName(string branchName)
+    {
+        if (branchName.Contains('/', StringComparison.Ordinal) ||
+            !(branchName.StartsWith("m", StringComparison.Ordinal) || branchName.StartsWith("p", StringComparison.Ordinal)) ||
+            !branchName.EndsWith("-validation", StringComparison.Ordinal))
+            throw new InvalidOperationException("This capability is restricted to flat m*-validation or p*-validation branch names.");
+    }
+
+    private static async Task RequireNoConfiguredUpstreamAsync(string repository, string branchName)
+    {
+        var result = await RunGitAsync(
+            repository,
+            new[] { "for-each-ref", "--format=%(upstream:remotename)%09%(upstream:remoteref)", $"refs/heads/{branchName}" },
+            30);
+        if (!string.IsNullOrWhiteSpace(NormalizeText(result.StdOut)))
+            throw new InvalidOperationException("Current Git branch already has a configured upstream; use git_push_plan instead.");
+    }
+
+    private static async Task<string?> GetRemoteBranchCommitAsync(string repository, string remote, string branchName)
+    {
+        ValidateRemoteName(remote);
+        await ValidateBranchNameAsync(repository, branchName);
+        var expectedRef = $"refs/heads/{branchName}";
+        var result = await RunGitAsync(
+            repository,
+            new[] { "ls-remote", "--heads", remote, expectedRef },
+            60,
+            networkHttpsOnly: true);
+        var normalized = NormalizeText(result.StdOut);
+        if (string.IsNullOrWhiteSpace(normalized))
+            return null;
+
+        var lines = normalized.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (lines.Length != 1)
+            throw new InvalidOperationException("Remote branch lookup returned an unexpected number of refs.");
+        var parts = lines[0].Split('\t');
+        if (parts.Length != 2 || !string.Equals(parts[1], expectedRef, StringComparison.Ordinal))
+            throw new InvalidOperationException("Remote branch lookup returned an unexpected ref.");
+        var commit = parts[0].Trim();
+        if (commit.Length < 12 || commit.Any(c => !Uri.IsHexDigit(c)))
+            throw new InvalidOperationException("Remote branch lookup returned an invalid commit identity.");
+        return commit;
+    }
     private static SignedPlan CreatePlan(string operation, string target, Dictionary<string, string> parameters, RiskClass riskClass, string summary)
     {
         var now = DateTimeOffset.UtcNow;

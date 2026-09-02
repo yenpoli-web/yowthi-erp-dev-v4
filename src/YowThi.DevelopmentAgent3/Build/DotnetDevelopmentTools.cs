@@ -85,7 +85,7 @@ public static class DotnetDevelopmentTools
     }
 
     [McpServerTool(Name = "dotnet_test_execute", ReadOnly = false, Destructive = false, OpenWorld = false)]
-    [Description("Execute one previously prepared build/dotnet-test plan by starting an Agent-owned managed fixed dotnet test --configuration <sealed> --no-restore --no-build --nologo job. The project/solution input fingerprint, sealed build-output fingerprint, fixed dotnet.exe SHA-256, exact working directory, configuration, timeout, and signed intent are revalidated immediately before start. Output is captured as UTF-8 with fixed en-US CLI language. No build or restore is performed.")]
+    [Description("Execute one previously prepared build/dotnet-test plan by starting an Agent-owned managed fixed dotnet test --configuration <sealed> --no-restore --no-build job. The project/solution input fingerprint, sealed build-output fingerprint, fixed dotnet.exe SHA-256, exact working directory, configuration, timeout, and signed intent are revalidated immediately before start. Output is captured as UTF-8 with fixed en-US CLI language. No build or restore is performed.")]
     public static DotnetJobStartResult DotnetTestExecute(string planId, string approvalCode, string operation, string target, string summary, string riskClass)
         => StartJob(planId, approvalCode, operation, target, summary, riskClass, "dotnet-test");
 
@@ -155,7 +155,7 @@ public static class DotnetDevelopmentTools
     }
 
     [McpServerTool(Name = "dotnet_job_cancel_execute", ReadOnly = false, Destructive = false, OpenWorld = false)]
-    [Description("Execute one previously prepared build/dotnet-job-cancel plan. Only the exact active Agent-owned dotnet restore/test job sealed in the plan can be terminated. Job ID, operation, project identity, PID, and process start time are revalidated before native .NET process-tree termination. Arbitrary PID termination is not supported.")]
+    [Description("Execute one previously prepared build/dotnet-job-cancel plan. Only the exact active Agent-owned dotnet job sealed in the plan can be terminated. Job ID, operation, project identity, PID, and process start time are revalidated before native .NET process-tree termination. Arbitrary PID termination is not supported.")]
     public static async Task<ExecutionResult> DotnetJobCancelExecute(string planId, string approvalCode, string operation, string target, string summary, string riskClass)
     {
         var plan = Store.GetValidated(planId, approvalCode);
@@ -312,7 +312,6 @@ public static class DotnetDevelopmentTools
             psi.ArgumentList.Add(configuration!);
             psi.ArgumentList.Add("--no-restore");
             psi.ArgumentList.Add("--no-build");
-            psi.ArgumentList.Add("--nologo");
         }
 
         CleanupCompletedJobs();

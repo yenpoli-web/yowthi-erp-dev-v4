@@ -48,9 +48,9 @@ public static class EfMigrationTools
             "yowthi-erp-v2",
             @"C:\Dev\yowthi-erp-v2",
             "127.0.0.1",
-            5432,
-            "yowthi_erp_v2",
-            "postgres")
+            55432,
+            "yowthi_dev",
+            "yowthi_dev")
     ];
 
     private static readonly Regex ContextNamePattern = new(
