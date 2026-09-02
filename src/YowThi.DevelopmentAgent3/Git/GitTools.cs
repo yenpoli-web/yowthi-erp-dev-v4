@@ -204,7 +204,8 @@ public static class GitTools
         RequireIntentMatch(plan, "git-branch-switch", operation, target, summary, riskClass);
         var repo = await ValidateRepositoryAsync(RequireParameter(plan, "repository"), requireMutable: true);
         var branchName = RequireParameter(plan, "branchName");
-        var expectedCurrentBranch = RequireParameter(plan, "currentBranch");
+        if (!plan.Parameters.TryGetValue("currentBranch", out var expectedCurrentBranch))
+            throw new InvalidDataException("currentBranch parameter is required.");
         var expectedCurrentHead = RequireParameter(plan, "currentHead");
         var expectedTargetCommit = RequireParameter(plan, "targetCommit");
         await ValidateBranchNameAsync(repo, branchName);
