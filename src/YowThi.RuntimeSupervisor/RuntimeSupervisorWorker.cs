@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net;
+using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.Extensions.Hosting;
@@ -17,11 +18,21 @@ public sealed class RuntimeSupervisorWorker(ILogger<RuntimeSupervisorWorker> log
     private const string ActiveStatePath = DevRoot + @"\.agent3-handoff\active-runtime.json";
     private const string LegacyStatePath = DevRoot + @"\.agent3-handoff\runtime-state.json";
     private const string DotnetExe = @"C:\Program Files\dotnet\dotnet.exe";
+
+    private const string TunnelExe = @"C:\ProgramData\YowThi\TunnelClient\bin\tunnel-client.exe";
+    private const string TunnelExeSha256 = "6649169733686805CA16CCCD91774594D0C017FD729C37AD4CE1CD18323D9AE8";
+    private const string TunnelProfileDirectory = @"C:\ProgramData\YowThi\TunnelClient\profiles";
+    private const string TunnelProfilePath = TunnelProfileDirectory + @"\yowthi-erp-dev-v4.yaml";
+    private const string TunnelProfileSha256 = "8B46DC3AF0DBE713CBEF8ABC2AE864AF780F8DC713CBF011ABC3405F6D0F911F";
+    private const string TunnelRuntimeKeyPath = @"C:\Users\YowThi\AppData\Local\YowThi\TunnelClient\secrets\runtime.key";
+    private const int TunnelHealthPort = 8792;
+
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true, WriteIndented = true };
 
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(2) };
     private ActiveState? _active;
     private Process? _ownedRuntime;
+    private Process? _ownedTunnel;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -31,7 +42,10 @@ public sealed class RuntimeSupervisorWorker(ILogger<RuntimeSupervisorWorker> log
 
         _active = await LoadOrImportActiveStateAsync(stoppingToken);
         if (_active is not null)
+        {
             await EnsureActiveRuntimeAsync(stoppingToken);
+            await EnsureTunnelAsync(stoppingToken);
+        }
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -54,8 +68,14 @@ public sealed class RuntimeSupervisorWorker(ILogger<RuntimeSupervisorWorker> log
                     continue;
                 }
 
-                if (_active is not null && !await IsHealthyAsync(_active.Current, stoppingToken))
-                    await EnsureActiveRuntimeAsync(stoppingToken);
+                if (_active is not null)
+                {
+                    if (!await IsHealthyAsync(_active.Current, stoppingToken))
+                        await EnsureActiveRuntimeAsync(stoppingToken);
+
+                    if (await IsHealthyAsync(_active.Current, stoppingToken))
+                        await EnsureTunnelAsync(stoppingToken);
+                }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -70,6 +90,7 @@ public sealed class RuntimeSupervisorWorker(ILogger<RuntimeSupervisorWorker> log
             catch (OperationCanceledException) { break; }
         }
 
+        StopOwnedTunnel();
         StopOwnedRuntime();
         _http.Dispose();
     }
@@ -127,6 +148,50 @@ public sealed class RuntimeSupervisorWorker(ILogger<RuntimeSupervisorWorker> log
         logger.LogInformation("Recovered active runtime pid={Pid} sha={Sha}.", current.ProcessId, current.RuntimeSha256);
     }
 
+    private async Task EnsureTunnelAsync(CancellationToken token)
+    {
+        if (_active is null || !await IsHealthyAsync(_active.Current, token))
+            return;
+
+        if (await IsTunnelReadyAsync(token))
+        {
+            if (_ownedTunnel is { HasExited: true })
+            {
+                _ownedTunnel.Dispose();
+                _ownedTunnel = null;
+            }
+            return;
+        }
+
+        if (_ownedTunnel is { HasExited: false })
+        {
+            try
+            {
+                _ownedTunnel.Kill(entireProcessTree: true);
+                _ownedTunnel.WaitForExit(5000);
+            }
+            catch { }
+            _ownedTunnel.Dispose();
+            _ownedTunnel = null;
+        }
+        else if (_ownedTunnel is not null)
+        {
+            _ownedTunnel.Dispose();
+            _ownedTunnel = null;
+        }
+
+        _ownedTunnel = StartTunnel();
+        if (!await WaitTunnelReadyAsync(_ownedTunnel, token))
+        {
+            try { if (!_ownedTunnel.HasExited) _ownedTunnel.Kill(entireProcessTree: true); } catch { }
+            _ownedTunnel.Dispose();
+            _ownedTunnel = null;
+            throw new InvalidOperationException("V4 tunnel failed boot/crash recovery readiness validation.");
+        }
+
+        logger.LogInformation("Recovered V4 tunnel pid={Pid}.", _ownedTunnel.Id);
+    }
+
     private async Task ActivatePendingAsync(string manifestPath, CancellationToken token)
     {
         Process? started = null;
@@ -155,6 +220,8 @@ public sealed class RuntimeSupervisorWorker(ILogger<RuntimeSupervisorWorker> log
                 runtimeSha256 = activated.RuntimeSha256,
                 activatedUtc = DateTimeOffset.UtcNow
             });
+
+            await EnsureTunnelAsync(token);
         }
         catch (Exception ex)
         {
@@ -213,12 +280,36 @@ public sealed class RuntimeSupervisorWorker(ILogger<RuntimeSupervisorWorker> log
         catch { return false; }
     }
 
+    private static async Task<bool> IsTunnelReadyAsync(CancellationToken token)
+    {
+        try
+        {
+            using var tcp = new TcpClient();
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(token);
+            cts.CancelAfter(TimeSpan.FromSeconds(1));
+            await tcp.ConnectAsync(IPAddress.Loopback, TunnelHealthPort, cts.Token);
+            return tcp.Connected;
+        }
+        catch { return false; }
+    }
+
     private async Task<bool> WaitHealthyAsync(RuntimeSlot slot, Process process, CancellationToken token)
     {
         for (var i = 0; i < 40; i++)
         {
             if (process.HasExited) return false;
             if (await IsHealthyAsync(slot, token)) return true;
+            await Task.Delay(500, token);
+        }
+        return false;
+    }
+
+    private static async Task<bool> WaitTunnelReadyAsync(Process process, CancellationToken token)
+    {
+        for (var i = 0; i < 40; i++)
+        {
+            if (process.HasExited) return false;
+            if (await IsTunnelReadyAsync(token)) return true;
             await Task.Delay(500, token);
         }
         return false;
@@ -237,6 +328,77 @@ public sealed class RuntimeSupervisorWorker(ILogger<RuntimeSupervisorWorker> log
         psi.ArgumentList.Add(slot.RuntimeDll);
         psi.Environment["YOWTHI_AGENT3_URL"] = NormalizeUrl(slot.ListenUrl);
         return Process.Start(psi) ?? throw new InvalidOperationException("Failed to start runtime.");
+    }
+
+    private static Process StartTunnel()
+    {
+        ValidateTunnelArtifacts();
+        var runtimeKey = ReadRuntimeKey();
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = TunnelExe,
+                WorkingDirectory = Path.GetDirectoryName(TunnelExe)!,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            psi.ArgumentList.Add("run");
+            psi.ArgumentList.Add("--profile");
+            psi.ArgumentList.Add("yowthi-erp-dev-v4");
+            psi.ArgumentList.Add("--profile-dir");
+            psi.ArgumentList.Add(TunnelProfileDirectory);
+            psi.Environment["CONTROL_PLANE_API_KEY"] = runtimeKey;
+            return Process.Start(psi) ?? throw new InvalidOperationException("Failed to start V4 tunnel.");
+        }
+        finally
+        {
+            runtimeKey = string.Empty;
+        }
+    }
+
+    private static void ValidateTunnelArtifacts()
+    {
+        ValidateFixedFile(TunnelExe, TunnelExeSha256, "Tunnel executable");
+        ValidateFixedFile(TunnelProfilePath, TunnelProfileSha256, "Tunnel profile");
+
+        var profileDirectory = Path.GetFullPath(TunnelProfileDirectory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var profileParent = Path.GetFullPath(@"C:\ProgramData\YowThi\TunnelClient").TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var actualParent = Path.GetDirectoryName(profileDirectory)?.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (!string.Equals(actualParent, profileParent, StringComparison.OrdinalIgnoreCase))
+            throw new UnauthorizedAccessException("Tunnel profile directory is outside the fixed YowThi TunnelClient root.");
+        RejectReparse(profileParent);
+        RejectReparse(profileDirectory);
+    }
+
+    private static void ValidateFixedFile(string path, string expectedSha256, string label)
+    {
+        var fullPath = Path.GetFullPath(path);
+        if (!File.Exists(fullPath))
+            throw new FileNotFoundException(label + " does not exist.", fullPath);
+        if ((File.GetAttributes(fullPath) & FileAttributes.ReparsePoint) != 0)
+            throw new UnauthorizedAccessException(label + " may not be a reparse point.");
+        using var stream = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        var actual = Convert.ToHexString(SHA256.HashData(stream));
+        if (!string.Equals(actual, expectedSha256, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(label + " SHA-256 mismatch.");
+    }
+
+    private static string ReadRuntimeKey()
+    {
+        var path = Path.GetFullPath(TunnelRuntimeKeyPath);
+        if (!File.Exists(path))
+            throw new FileNotFoundException("Tunnel runtime key file does not exist.", path);
+        if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+            throw new UnauthorizedAccessException("Tunnel runtime key file may not be a reparse point.");
+
+        var value = File.ReadAllText(path).Trim();
+        if (!value.StartsWith("sk-", StringComparison.Ordinal) ||
+            value.Length < 20 ||
+            value.Length > 4096 ||
+            value.Any(char.IsWhiteSpace))
+            throw new InvalidDataException("Tunnel runtime key file is invalid.");
+        return value;
     }
 
     private static RuntimeSlot SlotFromManifest(HandoffManifest manifest)
@@ -274,7 +436,7 @@ public sealed class RuntimeSupervisorWorker(ILogger<RuntimeSupervisorWorker> log
     private static void RejectReparse(string path)
     {
         if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
-            throw new UnauthorizedAccessException("Lifecycle path may not be a reparse point: " + path);
+            throw new UnauthorizedAccessException("Fixed path may not be a reparse point: " + path);
     }
 
     private static void WriteActiveState(ActiveState state)
@@ -303,6 +465,21 @@ public sealed class RuntimeSupervisorWorker(ILogger<RuntimeSupervisorWorker> log
         File.WriteAllText(resultPath, JsonSerializer.Serialize(result, JsonOptions));
         File.Move(source, destination, overwrite: true);
         File.Move(resultPath, destination + ".result", overwrite: true);
+    }
+
+    private void StopOwnedTunnel()
+    {
+        try
+        {
+            if (_ownedTunnel is { HasExited: false })
+            {
+                _ownedTunnel.Kill(entireProcessTree: true);
+                _ownedTunnel.WaitForExit(5000);
+            }
+        }
+        catch { }
+        _ownedTunnel?.Dispose();
+        _ownedTunnel = null;
     }
 
     private void StopOwnedRuntime()
