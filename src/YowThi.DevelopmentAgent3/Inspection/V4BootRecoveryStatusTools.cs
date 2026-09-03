@@ -12,64 +12,68 @@ namespace YowThi.DevelopmentAgent3.Inspection;
 [McpServerToolType]
 public static class V4BootRecoveryStatusTools
 {
-    private const string ServiceName = "YowThiV4RuntimeSupervisor";
+    private const string SupervisorServiceName = "YowThiV4RuntimeSupervisor";
     private const string SupervisorExe = @"C:\Dev\YowThi-ERP-Dev-v4\runtime-supervisor\current\YowThi.RuntimeSupervisor.exe";
     private const string SupervisorDll = @"C:\Dev\YowThi-ERP-Dev-v4\runtime-supervisor\current\YowThi.RuntimeSupervisor.dll";
-    private const string ExpectedSupervisorDllSha256 = "4EADA3B4A0AB682D232DD1634EA2923262AE7A11C2F69E97DEF18D0A16B4DCDD";
+    private const string ExpectedSupervisorDllSha256 = "649CC1D78B8B7C9E1ACCAFDCE0C564592A7BCF8B047B7CF66E88FF2910D37D38";
+
+    private const string BootstrapBackendServiceName = "YowThiDevelopmentAgent";
+    private const string BootstrapBackendExe = @"C:\Program Files\YowThi\DevelopmentAgent\YowThi.DevelopmentAgent.exe";
+
     private const string ActiveStatePath = @"C:\Dev\YowThi-ERP-Dev-v4\.agent3-handoff\active-runtime.json";
+
     private const string TunnelExe = @"C:\ProgramData\YowThi\TunnelClient\bin\tunnel-client.exe";
     private const string ExpectedTunnelExeSha256 = "6649169733686805CA16CCCD91774594D0C017FD729C37AD4CE1CD18323D9AE8";
-    private const string TunnelProfile = @"C:\ProgramData\YowThi\TunnelClient\profiles\yowthi-erp-dev-v4.yaml";
-    private const string ExpectedTunnelProfileSha256 = "8B46DC3AF0DBE713CBEF8ABC2AE864AF780F8DC713CBF011ABC3405F6D0F911F";
+    private const string FormalTunnelProfile = @"C:\ProgramData\YowThi\TunnelClient\profiles\yowthi-erp-dev-v4.yaml";
+    private const string ExpectedFormalTunnelProfileSha256 = "8B46DC3AF0DBE713CBEF8ABC2AE864AF780F8DC713CBF011ABC3405F6D0F911F";
+    private const string BootstrapTunnelProfile = @"C:\ProgramData\YowThi\TunnelClient\profiles\yowthi-erp-bootstrap-8787-r1.yaml";
+    private const string ExpectedBootstrapTunnelProfileSha256 = "303C57D927D1FAFB99D9F58A029F6DC4BF52EB430B04B571B9D339FE9FEDFAAC";
+
+    private const int BootstrapBackendPort = 8787;
+    private const int FormalTunnelHealthPort = 8792;
+    private const int BootstrapTunnelHealthPort = 8793;
     private const int RuntimePort = 8828;
-    private const int TunnelHealthPort = 8792;
     private const int ProcessBasicInformation = 0;
 
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 
     [McpServerTool(Name = "v4_boot_recovery_status", ReadOnly = true, Destructive = false, OpenWorld = false)]
-    [Description("Read the complete YowThi ERP Dev v4 reboot-recovery acceptance state in one call. It verifies the fixed Automatic LocalSystem Runtime Supervisor service, current active-runtime identity, executing Agent runtime SHA/PID/tool registry, loopback 8828 listener, V4 tunnel 8792 listener and parent ownership, fixed tunnel executable/profile fingerprints, and boot-process ordering. Returns accepted plus explicit failure reasons. This is read-only and does not start, stop, restart, mutate, repair, read secrets, execute shells, or access production paths.")]
+    [Description("Read the complete YowThi ERP Dev v4 reboot-recovery acceptance state in one call. It verifies the Automatic LocalSystem Runtime Supervisor, the Automatic Bootstrap backend, active Agent runtime identity, loopback 8828 and 8787 listeners, Formal 8792 and Bootstrap 8793 tunnels with supervisor parent ownership, fixed supervisor/tunnel/profile fingerprints, and reboot ownership ordering. Returns accepted plus explicit failure reasons. This is read-only and does not start, stop, restart, mutate, repair, read secrets, execute shells, or access production paths.")]
     public static V4BootRecoveryStatusResult V4BootRecoveryStatus()
     {
         var failures = new List<string>();
         var checkedUtc = DateTimeOffset.UtcNow;
         var approximateBootUtc = checkedUtc - TimeSpan.FromMilliseconds(Environment.TickCount64);
 
-        ServiceStatusResult? service = null;
-        try
-        {
-            service = ServiceTools.ServiceStatus(ServiceName);
-            if (!string.Equals(service.State, "Running", StringComparison.Ordinal))
-                failures.Add($"Supervisor service state is {service.State}, expected Running.");
-            if (!string.Equals(service.StartType, "Automatic", StringComparison.Ordinal))
-                failures.Add($"Supervisor service start type is {service.StartType}, expected Automatic.");
-            if (!string.Equals(service.ServiceAccount, "LocalSystem", StringComparison.OrdinalIgnoreCase))
-                failures.Add($"Supervisor service account is {service.ServiceAccount}, expected LocalSystem.");
-            if (!string.Equals(Path.GetFullPath(service.EffectiveImageTarget ?? string.Empty), Path.GetFullPath(SupervisorExe), StringComparison.OrdinalIgnoreCase))
-                failures.Add("Supervisor service executable target does not match the fixed V4 supervisor path.");
-            if (service.ProcessId <= 0)
-                failures.Add("Supervisor service did not report a running process ID.");
-        }
-        catch (Exception ex)
-        {
-            failures.Add("Supervisor service read failed: " + ex.GetType().Name + ": " + ex.Message);
-        }
+        var supervisorService = ReadAndValidateService(
+            SupervisorServiceName,
+            SupervisorExe,
+            requireLocalSystem: true,
+            failures,
+            "Runtime Supervisor");
+
+        var bootstrapBackendService = ReadAndValidateService(
+            BootstrapBackendServiceName,
+            BootstrapBackendExe,
+            requireLocalSystem: true,
+            failures,
+            "Bootstrap backend");
 
         string? supervisorDllSha256 = null;
         try
         {
             supervisorDllSha256 = HashRegularFile(SupervisorDll);
             if (!string.Equals(supervisorDllSha256, ExpectedSupervisorDllSha256, StringComparison.OrdinalIgnoreCase))
-                failures.Add("Supervisor DLL SHA-256 does not match the accepted P11 boot-recovery build.");
+                failures.Add("Supervisor DLL SHA-256 does not match the accepted dual-tunnel P11 build.");
         }
         catch (Exception ex)
         {
-            failures.Add("Supervisor DLL verification failed: " + ex.GetType().Name + ": " + ex.Message);
+            failures.Add("Supervisor DLL verification failed: " + FormatError(ex));
         }
 
         var registry = ToolRegistryIdentity.Current;
         if (registry.ToolCount < 206)
-            failures.Add($"Agent tool registry contains {registry.ToolCount} tools; expected at least 206 after boot diagnostics is installed.");
+            failures.Add($"Agent tool registry contains {registry.ToolCount} tools; expected at least 206.");
         foreach (var required in new[]
         {
             "v4_boot_recovery_status",
@@ -88,16 +92,10 @@ public static class V4BootRecoveryStatusTools
         ActiveState? active = null;
         try
         {
-            if (!File.Exists(ActiveStatePath))
-                throw new FileNotFoundException("active-runtime state does not exist.", ActiveStatePath);
-            if ((File.GetAttributes(ActiveStatePath) & FileAttributes.ReparsePoint) != 0)
-                throw new UnauthorizedAccessException("active-runtime state may not be a reparse point.");
-            active = JsonSerializer.Deserialize<ActiveState>(File.ReadAllText(ActiveStatePath), JsonOptions)
-                ?? throw new InvalidDataException("active-runtime state is invalid.");
-
+            active = ReadActiveState();
             if (active.SchemaVersion != 2)
                 failures.Add($"active-runtime schemaVersion is {active.SchemaVersion}, expected 2.");
-            if (!string.Equals(Path.GetFullPath(active.Current.RuntimeDll), Path.GetFullPath(registry.RuntimeDll), StringComparison.OrdinalIgnoreCase))
+            if (!PathsEqual(active.Current.RuntimeDll, registry.RuntimeDll))
                 failures.Add("active-runtime current DLL does not match the executing Agent runtime DLL.");
             if (!string.Equals(active.Current.RuntimeSha256, registry.RuntimeSha256, StringComparison.OrdinalIgnoreCase))
                 failures.Add("active-runtime current SHA-256 does not match the executing Agent runtime SHA-256.");
@@ -110,42 +108,48 @@ public static class V4BootRecoveryStatusTools
         }
         catch (Exception ex)
         {
-            failures.Add("active-runtime verification failed: " + ex.GetType().Name + ": " + ex.Message);
+            failures.Add("active-runtime verification failed: " + FormatError(ex));
         }
 
         var listeners = NetworkTools.TcpListenerList();
-        var runtimeListeners = listeners.Where(x => x.Port == RuntimePort && IsLoopback(x.LocalAddress)).ToArray();
-        var tunnelListeners = listeners.Where(x => x.Port == TunnelHealthPort && IsLoopback(x.LocalAddress)).ToArray();
+        var runtimeListener = FindSingleLoopbackListener(listeners, RuntimePort, failures, "Agent runtime");
+        var bootstrapBackendListener = FindSingleLoopbackListener(listeners, BootstrapBackendPort, failures, "Bootstrap backend");
+        var formalTunnelListener = FindSingleLoopbackListener(listeners, FormalTunnelHealthPort, failures, "Formal V4 tunnel");
+        var bootstrapTunnelListener = FindSingleLoopbackListener(listeners, BootstrapTunnelHealthPort, failures, "Bootstrap tunnel");
 
-        TcpListenerItem? runtimeListener = runtimeListeners.Length == 1 ? runtimeListeners[0] : null;
-        TcpListenerItem? tunnelListener = tunnelListeners.Length == 1 ? tunnelListeners[0] : null;
-
-        if (runtimeListeners.Length != 1)
-            failures.Add($"Expected exactly one loopback listener on {RuntimePort}, found {runtimeListeners.Length}.");
-        else
+        if (runtimeListener is not null)
         {
-            if (runtimeListener!.ProcessId != registry.ProcessId)
+            if (runtimeListener.ProcessId != registry.ProcessId)
                 failures.Add($"Port {RuntimePort} is owned by PID {runtimeListener.ProcessId}, expected Agent PID {registry.ProcessId}.");
             if (!string.Equals(runtimeListener.ProcessName, "dotnet", StringComparison.OrdinalIgnoreCase))
                 failures.Add($"Port {RuntimePort} owner is {runtimeListener.ProcessName}, expected dotnet.");
         }
 
-        int? tunnelParentProcessId = null;
-        if (tunnelListeners.Length != 1)
+        if (bootstrapBackendListener is not null && bootstrapBackendService is not null)
         {
-            failures.Add($"Expected exactly one loopback listener on {TunnelHealthPort}, found {tunnelListeners.Length}.");
-        }
-        else
-        {
-            if (!string.Equals(Path.GetFullPath(tunnelListener!.ProcessPath ?? string.Empty), Path.GetFullPath(TunnelExe), StringComparison.OrdinalIgnoreCase))
-                failures.Add($"Port {TunnelHealthPort} owner executable does not match the fixed V4 tunnel-client path.");
-            tunnelParentProcessId = TryReadParentProcessId(tunnelListener.ProcessId);
-            if (service is not null && service.ProcessId > 0 && tunnelParentProcessId != service.ProcessId)
-                failures.Add($"V4 tunnel parent PID is {tunnelParentProcessId?.ToString() ?? "unknown"}, expected supervisor service PID {service.ProcessId}.");
+            if (bootstrapBackendListener.ProcessId != bootstrapBackendService.ProcessId)
+                failures.Add($"Port {BootstrapBackendPort} is owned by PID {bootstrapBackendListener.ProcessId}, expected Bootstrap service PID {bootstrapBackendService.ProcessId}.");
+            if (!PathsEqual(bootstrapBackendListener.ProcessPath, BootstrapBackendExe))
+                failures.Add($"Port {BootstrapBackendPort} owner executable does not match the fixed Bootstrap backend path.");
         }
 
+        var formalTunnelParentProcessId = ValidateTunnelListener(
+            formalTunnelListener,
+            FormalTunnelHealthPort,
+            supervisorService,
+            failures,
+            "Formal V4 tunnel");
+
+        var bootstrapTunnelParentProcessId = ValidateTunnelListener(
+            bootstrapTunnelListener,
+            BootstrapTunnelHealthPort,
+            supervisorService,
+            failures,
+            "Bootstrap tunnel");
+
         string? tunnelExeSha256 = null;
-        string? tunnelProfileSha256 = null;
+        string? formalTunnelProfileSha256 = null;
+        string? bootstrapTunnelProfileSha256 = null;
         try
         {
             tunnelExeSha256 = HashRegularFile(TunnelExe);
@@ -154,54 +158,152 @@ public static class V4BootRecoveryStatusTools
         }
         catch (Exception ex)
         {
-            failures.Add("Tunnel executable verification failed: " + ex.GetType().Name + ": " + ex.Message);
+            failures.Add("Tunnel executable verification failed: " + FormatError(ex));
         }
         try
         {
-            tunnelProfileSha256 = HashRegularFile(TunnelProfile);
-            if (!string.Equals(tunnelProfileSha256, ExpectedTunnelProfileSha256, StringComparison.OrdinalIgnoreCase))
-                failures.Add("Tunnel profile SHA-256 mismatch.");
+            formalTunnelProfileSha256 = HashRegularFile(FormalTunnelProfile);
+            if (!string.Equals(formalTunnelProfileSha256, ExpectedFormalTunnelProfileSha256, StringComparison.OrdinalIgnoreCase))
+                failures.Add("Formal V4 tunnel profile SHA-256 mismatch.");
         }
         catch (Exception ex)
         {
-            failures.Add("Tunnel profile verification failed: " + ex.GetType().Name + ": " + ex.Message);
+            failures.Add("Formal V4 tunnel profile verification failed: " + FormatError(ex));
+        }
+        try
+        {
+            bootstrapTunnelProfileSha256 = HashRegularFile(BootstrapTunnelProfile);
+            if (!string.Equals(bootstrapTunnelProfileSha256, ExpectedBootstrapTunnelProfileSha256, StringComparison.OrdinalIgnoreCase))
+                failures.Add("Bootstrap tunnel profile SHA-256 mismatch.");
+        }
+        catch (Exception ex)
+        {
+            failures.Add("Bootstrap tunnel profile verification failed: " + FormatError(ex));
         }
 
-        DateTimeOffset? supervisorStartUtc = null;
-        DateTimeOffset? runtimeStartUtc = null;
-        DateTimeOffset? tunnelStartUtc = null;
-        try { if (service is not null && service.ProcessId > 0) supervisorStartUtc = Process.GetProcessById((int)service.ProcessId).StartTime.ToUniversalTime(); } catch { }
-        try { runtimeStartUtc = Process.GetProcessById(registry.ProcessId).StartTime.ToUniversalTime(); } catch { }
-        if (tunnelListener is not null && DateTimeOffset.TryParse(tunnelListener.StartTimeUtc, out var parsedTunnelStart))
-            tunnelStartUtc = parsedTunnelStart;
+        var supervisorStartUtc = TryProcessStart(supervisorService?.ProcessId);
+        var bootstrapBackendStartUtc = TryProcessStart(bootstrapBackendService?.ProcessId);
+        var runtimeStartUtc = TryProcessStart(registry.ProcessId);
+        var formalTunnelStartUtc = ParseStartTime(formalTunnelListener?.StartTimeUtc);
+        var bootstrapTunnelStartUtc = ParseStartTime(bootstrapTunnelListener?.StartTimeUtc);
 
         if (supervisorStartUtc is not null && runtimeStartUtc is not null && runtimeStartUtc < supervisorStartUtc)
-            failures.Add("Runtime started before the supervisor service, which violates the reboot ownership order.");
-        if (supervisorStartUtc is not null && tunnelStartUtc is not null && tunnelStartUtc < supervisorStartUtc)
-            failures.Add("Tunnel started before the supervisor service, which violates the reboot ownership order.");
+            failures.Add("Runtime started before the supervisor service, which violates reboot ownership order.");
+        if (supervisorStartUtc is not null && formalTunnelStartUtc is not null && formalTunnelStartUtc < supervisorStartUtc)
+            failures.Add("Formal V4 tunnel started before the supervisor service, which violates reboot ownership order.");
+        if (supervisorStartUtc is not null && bootstrapTunnelStartUtc is not null && bootstrapTunnelStartUtc < supervisorStartUtc)
+            failures.Add("Bootstrap tunnel started before the supervisor service, which violates reboot ownership order.");
+        if (bootstrapBackendStartUtc is not null && bootstrapTunnelStartUtc is not null && bootstrapTunnelStartUtc < bootstrapBackendStartUtc)
+            failures.Add("Bootstrap tunnel started before the Bootstrap backend, which violates recovery dependency order.");
 
         return new V4BootRecoveryStatusResult(
             failures.Count == 0,
             failures,
             approximateBootUtc,
             checkedUtc,
-            service,
+            supervisorService,
+            bootstrapBackendService,
             supervisorDllSha256,
             registry,
             active,
             runtimeListener,
-            tunnelListener,
-            tunnelParentProcessId,
+            bootstrapBackendListener,
+            formalTunnelListener,
+            formalTunnelParentProcessId,
+            bootstrapTunnelListener,
+            bootstrapTunnelParentProcessId,
             tunnelExeSha256,
-            tunnelProfileSha256,
+            formalTunnelProfileSha256,
+            bootstrapTunnelProfileSha256,
             supervisorStartUtc,
+            bootstrapBackendStartUtc,
             runtimeStartUtc,
-            tunnelStartUtc);
+            formalTunnelStartUtc,
+            bootstrapTunnelStartUtc);
     }
 
-    private static bool IsLoopback(string address)
-        => string.Equals(address, "127.0.0.1", StringComparison.OrdinalIgnoreCase) ||
-           string.Equals(address, "0.0.0.0", StringComparison.OrdinalIgnoreCase);
+    private static ServiceStatusResult? ReadAndValidateService(
+        string serviceName,
+        string expectedExecutable,
+        bool requireLocalSystem,
+        List<string> failures,
+        string label)
+    {
+        try
+        {
+            var service = ServiceTools.ServiceStatus(serviceName);
+            if (!string.Equals(service.State, "Running", StringComparison.Ordinal))
+                failures.Add($"{label} service state is {service.State}, expected Running.");
+            if (!string.Equals(service.StartType, "Automatic", StringComparison.Ordinal))
+                failures.Add($"{label} service start type is {service.StartType}, expected Automatic.");
+            if (requireLocalSystem && !string.Equals(service.ServiceAccount, "LocalSystem", StringComparison.OrdinalIgnoreCase))
+                failures.Add($"{label} service account is {service.ServiceAccount}, expected LocalSystem.");
+            if (!PathsEqual(service.EffectiveImageTarget, expectedExecutable))
+                failures.Add($"{label} service executable target does not match the fixed path.");
+            if (service.ProcessId <= 0)
+                failures.Add($"{label} service did not report a running process ID.");
+            return service;
+        }
+        catch (Exception ex)
+        {
+            failures.Add($"{label} service read failed: {FormatError(ex)}");
+            return null;
+        }
+    }
+
+    private static ActiveState ReadActiveState()
+    {
+        if (!File.Exists(ActiveStatePath))
+            throw new FileNotFoundException("active-runtime state does not exist.", ActiveStatePath);
+        if ((File.GetAttributes(ActiveStatePath) & FileAttributes.ReparsePoint) != 0)
+            throw new UnauthorizedAccessException("active-runtime state may not be a reparse point.");
+        return JsonSerializer.Deserialize<ActiveState>(File.ReadAllText(ActiveStatePath), JsonOptions)
+            ?? throw new InvalidDataException("active-runtime state is invalid.");
+    }
+
+    private static TcpListenerItem? FindSingleLoopbackListener(
+        IReadOnlyList<TcpListenerItem> listeners,
+        int port,
+        List<string> failures,
+        string label)
+    {
+        var matches = listeners.Where(x => x.Port == port && string.Equals(x.LocalAddress, "127.0.0.1", StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (matches.Length != 1)
+        {
+            failures.Add($"Expected exactly one 127.0.0.1 listener for {label} on port {port}, found {matches.Length}.");
+            return null;
+        }
+        return matches[0];
+    }
+
+    private static int? ValidateTunnelListener(
+        TcpListenerItem? listener,
+        int port,
+        ServiceStatusResult? supervisorService,
+        List<string> failures,
+        string label)
+    {
+        if (listener is null) return null;
+        if (!PathsEqual(listener.ProcessPath, TunnelExe))
+            failures.Add($"Port {port} owner executable does not match the fixed tunnel-client path for {label}.");
+        var parent = TryReadParentProcessId(listener.ProcessId);
+        if (supervisorService is not null && supervisorService.ProcessId > 0 && parent != supervisorService.ProcessId)
+            failures.Add($"{label} parent PID is {parent?.ToString() ?? "unknown"}, expected supervisor service PID {supervisorService.ProcessId}.");
+        return parent;
+    }
+
+    private static bool PathsEqual(string? left, string? right)
+    {
+        if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right)) return false;
+        try
+        {
+            return string.Equals(Path.GetFullPath(left), Path.GetFullPath(right), StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
 
     private static string HashRegularFile(string path)
     {
@@ -213,6 +315,25 @@ public static class V4BootRecoveryStatusTools
         using var stream = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read);
         return Convert.ToHexString(SHA256.HashData(stream));
     }
+
+    private static DateTimeOffset? TryProcessStart(uint? processId)
+        => processId is > 0 and <= int.MaxValue ? TryProcessStart((int)processId.Value) : null;
+
+    private static DateTimeOffset? TryProcessStart(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return process.StartTime.ToUniversalTime();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static DateTimeOffset? ParseStartTime(string? value)
+        => DateTimeOffset.TryParse(value, out var parsed) ? parsed : null;
 
     private static int? TryReadParentProcessId(int processId)
     {
@@ -240,8 +361,15 @@ public static class V4BootRecoveryStatusTools
         }
     }
 
+    private static string FormatError(Exception ex) => ex.GetType().Name + ": " + ex.Message;
+
     [DllImport("ntdll.dll")]
-    private static extern int NtQueryInformationProcess(IntPtr processHandle, int processInformationClass, IntPtr processInformation, int processInformationLength, out int returnLength);
+    private static extern int NtQueryInformationProcess(
+        IntPtr processHandle,
+        int processInformationClass,
+        IntPtr processInformation,
+        int processInformationLength,
+        out int returnLength);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct PROCESS_BASIC_INFORMATION
@@ -264,14 +392,21 @@ public sealed record V4BootRecoveryStatusResult(
     DateTimeOffset ApproximateBootUtc,
     DateTimeOffset CheckedUtc,
     ServiceStatusResult? SupervisorService,
+    ServiceStatusResult? BootstrapBackendService,
     string? SupervisorDllSha256,
     ToolRegistrySnapshot ToolRegistry,
     V4BootRecoveryStatusTools.ActiveState? ActiveRuntime,
     TcpListenerItem? RuntimeListener,
-    TcpListenerItem? TunnelListener,
-    int? TunnelParentProcessId,
+    TcpListenerItem? BootstrapBackendListener,
+    TcpListenerItem? FormalTunnelListener,
+    int? FormalTunnelParentProcessId,
+    TcpListenerItem? BootstrapTunnelListener,
+    int? BootstrapTunnelParentProcessId,
     string? TunnelExeSha256,
-    string? TunnelProfileSha256,
+    string? FormalTunnelProfileSha256,
+    string? BootstrapTunnelProfileSha256,
     DateTimeOffset? SupervisorStartUtc,
+    DateTimeOffset? BootstrapBackendStartUtc,
     DateTimeOffset? RuntimeStartUtc,
-    DateTimeOffset? TunnelStartUtc);
+    DateTimeOffset? FormalTunnelStartUtc,
+    DateTimeOffset? BootstrapTunnelStartUtc);
