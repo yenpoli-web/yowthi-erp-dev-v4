@@ -5,4 +5,5 @@ using YowThi.RuntimeSupervisor;
 var builder = Host.CreateApplicationBuilder(args);
 builder.Services.AddWindowsService(options => options.ServiceName = "YowThi V4 Runtime Supervisor");
 builder.Services.AddHostedService<RuntimeSupervisorWorker>();
+builder.Services.AddHostedService<BootstrapTunnelRecoveryWorker>();
 await builder.Build().RunAsync();
