@@ -177,8 +177,8 @@ public static class V4BootRecoveryStatusTools
 
         if (supervisorStartUtc is not null && runtimeStartUtc is not null && runtimeStartUtc < supervisorStartUtc)
             failures.Add("Runtime started before the supervisor service, which violates the reboot ownership order.");
-        if (runtimeStartUtc is not null && tunnelStartUtc is not null && tunnelStartUtc < runtimeStartUtc)
-            failures.Add("Tunnel started before the active runtime, which violates the reboot dependency order.");
+        if (supervisorStartUtc is not null && tunnelStartUtc is not null && tunnelStartUtc < supervisorStartUtc)
+            failures.Add("Tunnel started before the supervisor service, which violates the reboot ownership order.");
 
         return new V4BootRecoveryStatusResult(
             failures.Count == 0,
