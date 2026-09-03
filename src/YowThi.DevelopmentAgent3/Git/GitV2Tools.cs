@@ -176,6 +176,7 @@ public static class GitV2Tools
         var currentHead = await GetHeadAsync(repo);
         var statusSha256 = await GetStatusSnapshotSha256Async(repo);
         var stagedDiffSha256 = await GetStagedDiffSha256Async(repo, requireChanges: true);
+        var commitIdentity = await GetHeadCommitIdentityAsync(repo);
 
         var parameters = new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -183,7 +184,9 @@ public static class GitV2Tools
             ["message"] = normalizedMessage,
             ["currentHead"] = currentHead,
             ["statusSha256"] = statusSha256,
-            ["stagedDiffSha256"] = stagedDiffSha256
+            ["stagedDiffSha256"] = stagedDiffSha256,
+            ["commitAuthorName"] = commitIdentity.Name,
+            ["commitAuthorEmail"] = commitIdentity.Email
         };
         var summary = $"Commit sealed staged Git changes in {repo} at HEAD {currentHead[..12]}";
         return CreatePlan("git-commit", repo, parameters, RiskClass.Medium, summary);
@@ -206,18 +209,28 @@ public static class GitV2Tools
         var expectedHead = RequireParameter(plan, "currentHead");
         var expectedStatusSha256 = RequireParameter(plan, "statusSha256");
         var expectedStagedDiffSha256 = RequireParameter(plan, "stagedDiffSha256");
+        var expectedAuthorName = RequireParameter(plan, "commitAuthorName");
+        var expectedAuthorEmail = RequireParameter(plan, "commitAuthorEmail");
 
         var actualHead = await GetHeadAsync(repo);
         var actualStatusSha256 = await GetStatusSnapshotSha256Async(repo);
         var actualStagedDiffSha256 = await GetStagedDiffSha256Async(repo, requireChanges: true);
+        var actualCommitIdentity = await GetHeadCommitIdentityAsync(repo);
         if (!string.Equals(expectedHead, actualHead, StringComparison.OrdinalIgnoreCase) ||
             !string.Equals(expectedStatusSha256, actualStatusSha256, StringComparison.OrdinalIgnoreCase) ||
-            !string.Equals(expectedStagedDiffSha256, actualStagedDiffSha256, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Git staged state changed after plan creation.");
+            !string.Equals(expectedStagedDiffSha256, actualStagedDiffSha256, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(expectedAuthorName, actualCommitIdentity.Name, StringComparison.Ordinal) ||
+            !string.Equals(expectedAuthorEmail, actualCommitIdentity.Email, StringComparison.Ordinal))
+            throw new InvalidOperationException("Git staged state or sealed commit identity changed after plan creation.");
 
         try
         {
-            var result = await RunGitAsync(repo, new[] { "commit", "--no-verify", "--no-gpg-sign", "-m", message }, 120);
+            var result = await RunGitAsync(repo, new[]
+            {
+                "-c", $"user.name={expectedAuthorName}",
+                "-c", $"user.email={expectedAuthorEmail}",
+                "commit", "--no-verify", "--no-gpg-sign", "-m", message
+            }, 120);
             var newHead = await GetHeadAsync(repo);
             Store.Consume(planId);
             Audit.Append(plan.Tool, plan.Operation, plan.Target, new { plan.PlanId, oldHead = actualHead, newHead, result.ExitCode }, "executed");
@@ -742,6 +755,25 @@ public static class GitV2Tools
         return head;
     }
 
+    private static async Task<GitCommitIdentity> GetHeadCommitIdentityAsync(string repository)
+    {
+        var result = await RunGitAsync(repository, new[] { "show", "-s", "--format=%an%n%ae", "HEAD" }, 30);
+        var identityLines = NormalizeText(result.StdOut).Split('\n', StringSplitOptions.None);
+        if (identityLines.Length != 2)
+            throw new InvalidOperationException("Unable to resolve a single Git HEAD author identity.");
+        return new GitCommitIdentity(
+            ValidateGitIdentityComponent(identityLines[0], "author name"),
+            ValidateGitIdentityComponent(identityLines[1], "author email"));
+    }
+
+    private static string ValidateGitIdentityComponent(string value, string label)
+    {
+        var normalized = value.Trim();
+        if (string.IsNullOrWhiteSpace(normalized) || normalized.Length > 320 || normalized.Any(char.IsControl))
+            throw new InvalidOperationException($"Git HEAD {label} is not safe for sealed commit reuse.");
+        return normalized;
+    }
+
     private static async Task<string> GetLocalBranchCommitAsync(string repository, string branchName)
     {
         var result = await RunGitAsync(repository, new[] { "rev-parse", "--verify", $"refs/heads/{branchName}" }, 30);
@@ -992,5 +1024,6 @@ public static class GitV2Tools
             throw new UnauthorizedAccessException("Plan execution intent mismatch.");
     }
 
+    private sealed record GitCommitIdentity(string Name, string Email);
     private sealed record GitProcessResult(int ExitCode, string StdOut, string StdErr);
 }
