@@ -1,6 +1,7 @@
 # Build and acceptance outputs
 acceptance/
 staging/
+runtime-supervisor/
 **/bin/
 **/obj/
 
