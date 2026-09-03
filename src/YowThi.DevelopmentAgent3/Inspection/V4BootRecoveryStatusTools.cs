@@ -297,7 +297,13 @@ public static class V4BootRecoveryStatusTools
         if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right)) return false;
         try
         {
-            return string.Equals(Path.GetFullPath(left), Path.GetFullPath(right), StringComparison.OrdinalIgnoreCase);
+            static string Normalize(string value)
+            {
+                var trimmed = value.Trim().Trim('"');
+                return Path.TrimEndingDirectorySeparator(Path.GetFullPath(trimmed));
+            }
+
+            return string.Equals(Normalize(left), Normalize(right), StringComparison.OrdinalIgnoreCase);
         }
         catch
         {
