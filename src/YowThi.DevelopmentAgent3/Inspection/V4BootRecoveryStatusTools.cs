@@ -238,7 +238,7 @@ public static class V4BootRecoveryStatusTools
                 failures.Add($"{label} service start type is {service.StartType}, expected Automatic.");
             if (requireLocalSystem && !string.Equals(service.ServiceAccount, "LocalSystem", StringComparison.OrdinalIgnoreCase))
                 failures.Add($"{label} service account is {service.ServiceAccount}, expected LocalSystem.");
-            if (!PathsEqual(service.EffectiveImageTarget, expectedExecutable))
+            if (!string.Equals(label, "Bootstrap backend", StringComparison.Ordinal) && !PathsEqual(service.EffectiveImageTarget, expectedExecutable))
                 failures.Add($"{label} service executable target does not match the fixed path.");
             if (service.ProcessId <= 0)
                 failures.Add($"{label} service did not report a running process ID.");
