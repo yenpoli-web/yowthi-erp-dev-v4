@@ -103,10 +103,11 @@ internal static class DevArtifactPolicy
         if (split <= 0 || split == id.Length - 1) throw new ArgumentException("Invalid artifactId.", nameof(id));
         var kind = id[..split];
         var leaf = id[(split + 1)..];
-        if (!string.Equals(Path.GetFileName(leaf), leaf, StringComparison.Ordinal) || leaf.Contains("..", StringComparison.Ordinal)) throw new ArgumentException("Artifact leaf must be direct and safe.", nameof(id));
+        var isRootGitignoreBackup = string.Equals(kind, "root-bak", StringComparison.Ordinal) && IsRootGitignoreBackupLeaf(leaf);
+        if (!string.Equals(Path.GetFileName(leaf), leaf, StringComparison.Ordinal) || (!isRootGitignoreBackup && leaf.Contains("..", StringComparison.Ordinal))) throw new ArgumentException("Artifact leaf must be direct and safe.", nameof(id));
         var target = kind switch
         {
-            "root-bak" when leaf.EndsWith(".bak", StringComparison.OrdinalIgnoreCase) && leaf.Contains(".yowthi-", StringComparison.OrdinalIgnoreCase) => Path.Combine(Root, leaf),
+            "root-bak" when isRootGitignoreBackup || (leaf.EndsWith(".bak", StringComparison.OrdinalIgnoreCase) && leaf.Contains(".yowthi-", StringComparison.OrdinalIgnoreCase)) => Path.Combine(Root, leaf),
             "project-bak" when leaf.EndsWith(".bak", StringComparison.OrdinalIgnoreCase) && leaf.Contains(".yowthi-", StringComparison.OrdinalIgnoreCase) => Path.Combine(Project, leaf),
             "project-dir" when leaf is "bin" or "obj" => Path.Combine(Project, leaf),
             "staging-dir" => Path.Combine(Staging, leaf),
@@ -116,6 +117,15 @@ internal static class DevArtifactPolicy
         if (Inside(target, @"C:\yowthi-erp") || Inside(target, Path.Combine(Root, ".git")) || Inside(target, Path.Combine(Root, ".agent3-lifecycle")) || Inside(target, Path.Combine(Root, "acceptance")) || Inside(target, Path.Combine(Root, "runtime-supervisor")))
             throw new UnauthorizedAccessException("Protected target excluded from development cleanup.");
         return target;
+    }
+
+    private static bool IsRootGitignoreBackupLeaf(string leaf)
+    {
+        const string prefix = "..gitignore.yowthi-";
+        const string suffix = ".bak";
+        if (!leaf.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) || !leaf.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)) return false;
+        var token = leaf[prefix.Length..^suffix.Length];
+        return token.Length == 32 && token.All(Uri.IsHexDigit);
     }
 
     private static void RejectReparseAncestors(string target)
