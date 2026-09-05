@@ -14,4 +14,7 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
   </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\YowThi.DevelopmentAgent3\YowThi.DevelopmentAgent3.csproj" />
+  </ItemGroup>
 </Project>

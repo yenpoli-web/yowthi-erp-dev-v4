@@ -3,6 +3,9 @@ using ModelContextProtocol.Server;
 using YowThi.DevelopmentAgent3.Runtime;
 using YowThi.DevelopmentAgent3.Security;
 
+if (await YowThi.DevelopmentAgent3.Windows.InteractiveDesktopCaptureTools.TryRunHelperAsync(args))
+    return;
+
 var builder = WebApplication.CreateBuilder(args);
 builder.Host.UseWindowsService(options => options.ServiceName = "YowThi Development Agent 3");
 builder.WebHost.UseUrls(Environment.GetEnvironmentVariable("YOWTHI_AGENT3_URL") ?? "http://127.0.0.1:8791");
