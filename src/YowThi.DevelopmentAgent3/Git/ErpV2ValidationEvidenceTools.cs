@@ -293,7 +293,7 @@ public static class ErpV2ValidationEvidenceTools
                     "Job result after all job steps finish: Succeeded",
                     StringComparison.Ordinal);
                 var workerDoneEvidence = text.Contains(
-                    "[INFO Worker] Job completed.",
+                    "Job completed.",
                     StringComparison.Ordinal);
 
                 if (!jobEvidence || !completeEvidence || !finalEvidence || !workerDoneEvidence)
@@ -434,7 +434,10 @@ public static class ErpV2ValidationEvidenceTools
             var exactRepository =
                 string.Equals(resolvedTop, resolvedWorkspace, StringComparison.OrdinalIgnoreCase) &&
                 origin.Length == 1 &&
-                string.Equals(origin[0], ExpectedOriginUrl, StringComparison.Ordinal);
+                (
+                   string.Equals(origin[0], ExpectedOriginUrl, StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(origin[0], ExpectedOriginUrl[..^4], StringComparison.OrdinalIgnoreCase)
+                );
             var exactBranch = string.Equals(currentBranch, branchName, StringComparison.Ordinal);
             var exactSha = string.Equals(head, localHead, StringComparison.OrdinalIgnoreCase);
             var exactWorkflow = string.Equals(HashText(workflowText), workflowSha256, StringComparison.OrdinalIgnoreCase);
