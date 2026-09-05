@@ -12,12 +12,12 @@ public static class GitHubActionsTools
     private const string GhExe = @"C:\Program Files\GitHub CLI\gh.exe";
     private const string GitExe = @"C:\Program Files\Git\cmd\git.exe";
     private const string RepositoryPath = @"C:\Dev\YowThi-ERP-Dev-v4";
-    private const string RepositorySlug = "yenpoli-web/yowthi-erp-v2";
-    private const string ExpectedOriginUrl = "https://github.com/yenpoli-web/yowthi-erp-v2.git";
+    private const string RepositorySlug = "yenpoli-web/yowthi-erp-dev-v4";
+    private const string ExpectedOriginUrl = "https://github.com/yenpoli-web/yowthi-erp-dev-v4.git";
     private const string WorkflowFile = "dotnet.yml";
 
     [McpServerTool(Name = "github_workflow_run_status", ReadOnly = true, Destructive = false, OpenWorld = true)]
-    [Description("Read the latest GitHub Actions run for the fixed yenpoli-web/yowthi-erp-v2 dotnet.yml workflow whose head SHA exactly matches one local m*-validation or p*-validation branch. The fixed local repository identity, exact origin HTTPS URL, standard origin fetch refspec, branch name, local branch HEAD, and fixed GitHub CLI binary are validated before querying GitHub. The result reports whether the query succeeded, whether a same-SHA run exists, run identity/status/conclusion/event/timestamps/URL, and whether that exact local HEAD has completed successfully. No workflow is dispatched, no repository state is changed, no arbitrary repo/workflow/ref is accepted, and GitHub-hosted runner selection is not supported by this read-only capability.")]
+    [Description("Read the latest GitHub Actions run for the fixed yenpoli-web/yowthi-erp-dev-v4 dotnet.yml workflow whose head SHA exactly matches one local m*-validation or p*-validation branch. The fixed V4 repository identity, exact dedicated origin HTTPS URL, standard origin fetch refspec, branch name, local branch HEAD, and fixed GitHub CLI binary are validated before querying GitHub. No workflow is dispatched and no repository state is changed.")]
     public static async Task<GitHubWorkflowRunStatusResult> GitHubWorkflowRunStatus(string branchName)
     {
         ValidateValidationBranchName(branchName);
@@ -86,9 +86,8 @@ public static class GitHubActionsTools
             succeeded, null, DateTimeOffset.UtcNow);
     }
 
-
     [McpServerTool(Name = "github_workflow_run_jobs", ReadOnly = true, Destructive = false, OpenWorld = true)]
-    [Description("Read workflow and job evidence for the fixed yenpoli-web/yowthi-erp-v2 dotnet.yml run whose head SHA exactly matches one local m*-validation or p*-validation branch. The result includes the workflow display name/path, run status/conclusion, every job status/conclusion/runner identity/labels, required self-hosted and yowthi-erp-v2 label checks, and an eligible-for-main-fast-forward decision. The fixed repository, workflow, same-SHA run, origin HTTPS identity, standard fetch refspec, local branch HEAD, and fixed GitHub CLI binary are validated. This is read-only and cannot dispatch, rerun, cancel, or modify workflows or repositories.")]
+    [Description("Read workflow and job evidence for the fixed yenpoli-web/yowthi-erp-dev-v4 dotnet.yml run whose head SHA exactly matches one local m*-validation or p*-validation branch. The result validates workflow identity, self-hosted runner labels, job conclusions, and eligibility for local main fast-forward. This is read-only.")]
     public static async Task<GitHubWorkflowRunJobsResult> GitHubWorkflowRunJobs(string branchName)
     {
         var runStatus = await GitHubWorkflowRunStatus(branchName);
@@ -121,6 +120,7 @@ public static class GitHubActionsTools
         var apiHeadSha = runRoot.TryGetProperty("head_sha", out var headElement) ? headElement.GetString() : null;
         if (!string.Equals(apiHeadSha, runStatus.LocalHead, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("GitHub workflow run API head SHA does not match the sealed local validation HEAD.");
+
         var workflowIdentityMatches =
             string.Equals(workflowName, "dotnet-self-hosted", StringComparison.Ordinal) &&
             string.Equals(workflowPath, ".github/workflows/dotnet.yml", StringComparison.Ordinal);
@@ -140,8 +140,7 @@ public static class GitHubActionsTools
                 false, $"GitHub workflow jobs API query failed with exit code {jobsQuery.ExitCode}.", DateTimeOffset.UtcNow);
 
         using var jobsDocument = JsonDocument.Parse(jobsQuery.StdOut);
-        var jobsRoot = jobsDocument.RootElement;
-        if (!jobsRoot.TryGetProperty("jobs", out var jobsElement) || jobsElement.ValueKind != JsonValueKind.Array)
+        if (!jobsDocument.RootElement.TryGetProperty("jobs", out var jobsElement) || jobsElement.ValueKind != JsonValueKind.Array)
             throw new InvalidDataException("GitHub workflow jobs API output did not contain a jobs array.");
 
         var jobs = new List<GitHubWorkflowJobEvidence>();
@@ -152,21 +151,26 @@ public static class GitHubActionsTools
                 : Array.Empty<string>();
             var hasSelfHosted = labels.Contains("self-hosted", StringComparer.OrdinalIgnoreCase);
             var hasYowThiRunner = labels.Contains("yowthi-erp-v2", StringComparer.OrdinalIgnoreCase);
+            var jobStatus = job.TryGetProperty("status", out var jobStatusElement) ? jobStatusElement.GetString() : null;
+            var jobConclusion = job.TryGetProperty("conclusion", out var jobConclusionElement) ? jobConclusionElement.GetString() : null;
             jobs.Add(new GitHubWorkflowJobEvidence(
                 job.TryGetProperty("id", out var jobIdElement) && jobIdElement.TryGetInt64(out var jobId) ? jobId : 0,
                 job.TryGetProperty("name", out var jobNameElement) ? jobNameElement.GetString() : null,
-                job.TryGetProperty("status", out var jobStatusElement) ? jobStatusElement.GetString() : null,
-                job.TryGetProperty("conclusion", out var jobConclusionElement) ? jobConclusionElement.GetString() : null,
+                jobStatus,
+                jobConclusion,
                 job.TryGetProperty("runner_name", out var runnerNameElement) ? runnerNameElement.GetString() : null,
                 job.TryGetProperty("runner_group_name", out var runnerGroupElement) ? runnerGroupElement.GetString() : null,
-                labels, hasSelfHosted, hasYowThiRunner,
-                string.Equals(job.TryGetProperty("status", out var s) ? s.GetString() : null, "completed", StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(job.TryGetProperty("conclusion", out var c) ? c.GetString() : null, "success", StringComparison.OrdinalIgnoreCase)));
+                labels,
+                hasSelfHosted,
+                hasYowThiRunner,
+                string.Equals(jobStatus, "completed", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(jobConclusion, "success", StringComparison.OrdinalIgnoreCase)));
         }
 
         var requiredRunnerLabelsPresent = jobs.Count > 0 && jobs.All(x => x.HasSelfHostedLabel && x.HasYowThiErpV2Label);
         var allJobsSucceeded = jobs.Count > 0 && jobs.All(x => x.Succeeded);
         var eligible = runStatus.SucceededForLocalHead && workflowIdentityMatches && requiredRunnerLabelsPresent && allJobsSucceeded;
+
         return new GitHubWorkflowRunJobsResult(
             RepositorySlug, WorkflowFile, workflowName, workflowPath, branchName, runStatus.LocalHead,
             runId, runStatus.Status, runStatus.Conclusion, workflowIdentityMatches,
@@ -198,7 +202,7 @@ public static class GitHubActionsTools
         var urls = await RunGitAsync(new[] { "remote", "get-url", "--all", "origin" }, 30);
         var urlLines = NormalizeText(urls.StdOut).Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (urlLines.Length != 1 || !string.Equals(urlLines[0], ExpectedOriginUrl, StringComparison.Ordinal))
-            throw new InvalidOperationException("Fixed Git origin URL does not match yenpoli-web/yowthi-erp-v2 over HTTPS.");
+            throw new InvalidOperationException("Fixed Git origin URL does not match yenpoli-web/yowthi-erp-dev-v4 over HTTPS.");
 
         var fetch = await RunGitAsync(new[] { "config", "--get-all", "remote.origin.fetch" }, 30);
         var fetchLines = NormalizeText(fetch.StdOut).Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
@@ -239,14 +243,10 @@ public static class GitHubActionsTools
         psi.Environment["GIT_TERMINAL_PROMPT"] = "0";
         psi.Environment["GIT_PAGER"] = "cat";
         psi.ArgumentList.Add("--no-pager");
-        psi.ArgumentList.Add("-c");
-        psi.ArgumentList.Add("core.hooksPath=NUL");
-        psi.ArgumentList.Add("-c");
-        psi.ArgumentList.Add("core.fsmonitor=false");
-        psi.ArgumentList.Add("-c");
-        psi.ArgumentList.Add($"safe.directory={RepositoryPath}");
-        psi.ArgumentList.Add("-C");
-        psi.ArgumentList.Add(RepositoryPath);
+        psi.ArgumentList.Add("-c"); psi.ArgumentList.Add("core.hooksPath=NUL");
+        psi.ArgumentList.Add("-c"); psi.ArgumentList.Add("core.fsmonitor=false");
+        psi.ArgumentList.Add("-c"); psi.ArgumentList.Add($"safe.directory={RepositoryPath}");
+        psi.ArgumentList.Add("-C"); psi.ArgumentList.Add(RepositoryPath);
         foreach (var argument in arguments)
             psi.ArgumentList.Add(argument);
         return await RunProcessAsync(psi, timeoutSeconds, allowNonZero: false, "git.exe");
@@ -280,15 +280,13 @@ public static class GitHubActionsTools
         var stdoutTask = process.StandardOutput.ReadToEndAsync();
         var stderrTask = process.StandardError.ReadToEndAsync();
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
-        try
-        {
-            await process.WaitForExitAsync(cts.Token);
-        }
+        try { await process.WaitForExitAsync(cts.Token); }
         catch (OperationCanceledException)
         {
             try { process.Kill(entireProcessTree: true); } catch { }
             throw new TimeoutException($"{label} exceeded {timeoutSeconds} seconds.");
         }
+
         var stdout = await stdoutTask;
         var stderr = await stderrTask;
         var result = new CliResult(process.ExitCode, stdout, stderr);
