@@ -67,17 +67,13 @@ public static class GitFastForwardPromotionTools
     }
 
     [McpServerTool(Name = "git_fast_forward_promotion_execute", ReadOnly = false, Destructive = false, OpenWorld = false)]
-    [Description("Execute one signed git/git-fast-forward-promotion plan using fixed git merge --ff-only --no-edit semantics. Repository-wide worktree preflight, checked-out main, commits, ancestry, ahead/behind counts, state fingerprint, and git.exe SHA-256 are revalidated immediately before mutation. No checkout, merge commit, rebase, force, fetch, push, hooks, editor, signing, arbitrary refs, or arbitrary commands are used.")]
+    [Description("Execute one signed git/git-fast-forward-promotion plan using fixed git merge --ff-only --no-edit semantics. Only planId and approvalCode are accepted. The server revalidates the signed tool/operation/target plus repository-wide worktree preflight, checked-out main, commits, ancestry, ahead/behind counts, state fingerprint, and git.exe SHA-256 immediately before mutation. No checkout, merge commit, rebase, force, fetch, push, hooks, editor, signing, arbitrary refs, or arbitrary commands are used.")]
     public static async Task<GitFastForwardPromotionResult> GitFastForwardPromotionExecute(
         string planId,
-        string approvalCode,
-        string operation,
-        string target,
-        string summary,
-        string riskClass)
+        string approvalCode)
     {
         var plan = Store.GetValidated(planId, approvalCode);
-        RequireIntentMatch(plan, operation, target, summary, riskClass);
+        RequireSealedIntent(plan);
         var repo = Require(plan, "repository");
         var sourceBranch = Require(plan, "sourceBranch");
         var targetBranch = Require(plan, "targetBranch");
@@ -218,15 +214,13 @@ public static class GitFastForwardPromotionTools
     private static string Require(SignedPlan plan, string name) =>
         plan.Parameters.TryGetValue(name, out var value) ? value : throw new InvalidDataException($"{name} is required.");
 
-    private static void RequireIntentMatch(SignedPlan plan, string operation, string target, string summary, string riskClass)
+    private static void RequireSealedIntent(SignedPlan plan)
     {
         if (!string.Equals(plan.Tool, "git", StringComparison.Ordinal) ||
             !string.Equals(plan.Operation, "git-fast-forward-promotion", StringComparison.Ordinal) ||
-            !string.Equals(plan.Operation, operation, StringComparison.Ordinal) ||
-            !string.Equals(plan.Target, target, StringComparison.OrdinalIgnoreCase) ||
-            !string.Equals(plan.Summary, summary, StringComparison.Ordinal) ||
-            !string.Equals(plan.RiskClass.ToString(), riskClass, StringComparison.OrdinalIgnoreCase))
-            throw new UnauthorizedAccessException("Plan execution intent mismatch.");
+            string.IsNullOrWhiteSpace(plan.Target) ||
+            !string.Equals(plan.RiskClass.ToString(), RiskClass.Medium.ToString(), StringComparison.OrdinalIgnoreCase))
+            throw new UnauthorizedAccessException("Signed promotion plan intent is invalid.");
     }
 
     private static string GetFileSha256(string path)
