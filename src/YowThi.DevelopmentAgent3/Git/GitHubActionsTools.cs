@@ -11,7 +11,7 @@ public static class GitHubActionsTools
 {
     private const string GhExe = @"C:\Program Files\GitHub CLI\gh.exe";
     private const string GitExe = @"C:\Program Files\Git\cmd\git.exe";
-    private const string RepositoryPath = @"C:\Dev\yowthi-erp-v2";
+    private const string RepositoryPath = @"C:\Dev\YowThi-ERP-Dev-v4";
     private const string RepositorySlug = "yenpoli-web/yowthi-erp-v2";
     private const string ExpectedOriginUrl = "https://github.com/yenpoli-web/yowthi-erp-v2.git";
     private const string WorkflowFile = "dotnet.yml";
@@ -88,7 +88,7 @@ public static class GitHubActionsTools
 
 
     [McpServerTool(Name = "github_workflow_run_jobs", ReadOnly = true, Destructive = false, OpenWorld = true)]
-    [Description("Read workflow and job evidence for the fixed yenpoli-web/yowthi-erp-v2 dotnet.yml run whose head SHA exactly matches one local m*-validation or p*-validation branch. The result includes the workflow display name/path, run status/conclusion, every job status/conclusion/runner identity/labels, required self-hosted and yowthi-erp-v2 label checks, and an eligible-for-main-fast-forward decision. The fixed repository, workflow, same-SHA run, origin HTTPS identity, standard fetch refspec, local branch HEAD, and GitHub CLI binary are validated. This is read-only and cannot dispatch, rerun, cancel, or modify workflows or repositories.")]
+    [Description("Read workflow and job evidence for the fixed yenpoli-web/yowthi-erp-v2 dotnet.yml run whose head SHA exactly matches one local m*-validation or p*-validation branch. The result includes the workflow display name/path, run status/conclusion, every job status/conclusion/runner identity/labels, required self-hosted and yowthi-erp-v2 label checks, and an eligible-for-main-fast-forward decision. The fixed repository, workflow, same-SHA run, origin HTTPS identity, standard fetch refspec, local branch HEAD, and fixed GitHub CLI binary are validated. This is read-only and cannot dispatch, rerun, cancel, or modify workflows or repositories.")]
     public static async Task<GitHubWorkflowRunJobsResult> GitHubWorkflowRunJobs(string branchName)
     {
         var runStatus = await GitHubWorkflowRunStatus(branchName);
