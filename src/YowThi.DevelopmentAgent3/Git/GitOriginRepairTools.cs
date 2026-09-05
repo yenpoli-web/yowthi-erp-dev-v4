@@ -339,13 +339,15 @@ public static class GitOriginRepairTools
     {
         var snapshot = await GetUpstreamSnapshotAsync(repo);
         var sawMain = false;
-        foreach (var line in snapshot.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        foreach (var line in snapshot.Split('\n', StringSplitOptions.RemoveEmptyEntries))
         {
-            var parts = line.Split('\t');
-            if (parts.Length != 3) throw new InvalidOperationException("Unable to inspect local branch upstream configuration.");
-            var branch = parts[0].Trim();
-            var remote = parts[1].Trim();
-            var remoteRef = parts[2].Trim();
+            var parts = line.Split('\t', StringSplitOptions.None);
+            var branch = parts.Length > 0 ? parts[0].Trim() : string.Empty;
+            var remote = parts.Length > 1 ? parts[1].Trim() : string.Empty;
+            var remoteRef = parts.Length > 2 ? parts[2].Trim() : string.Empty;
+            if (string.IsNullOrWhiteSpace(branch))
+                continue;
+
             if (string.Equals(branch, "main", StringComparison.Ordinal))
             {
                 if (!string.Equals(remote, "origin", StringComparison.Ordinal) ||
