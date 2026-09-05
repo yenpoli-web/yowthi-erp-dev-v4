@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: cmd
+
 env:
   DOTNET_NOLOGO: '1'
   DOTNET_CLI_TELEMETRY_OPTOUT: '1'
@@ -21,9 +25,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Show .NET SDK
-        shell: powershell
-        run: |
-          & 'C:\Program Files\dotnet\dotnet.exe' --info
+        run: '"C:\Program Files\dotnet\dotnet.exe" --info'
 
   agent-build:
     runs-on: [self-hosted, yowthi-erp-v2]
@@ -32,9 +34,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Build Development Agent
-        shell: powershell
-        run: |
-          & 'C:\Program Files\dotnet\dotnet.exe' build src/YowThi.DevelopmentAgent3/YowThi.DevelopmentAgent3.csproj --configuration Release --nologo
+        run: '"C:\Program Files\dotnet\dotnet.exe" build src\YowThi.DevelopmentAgent3\YowThi.DevelopmentAgent3.csproj --configuration Release --nologo'
 
   supervisor-build:
     runs-on: [self-hosted, yowthi-erp-v2]
@@ -43,9 +43,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Build Runtime Supervisor
-        shell: powershell
-        run: |
-          & 'C:\Program Files\dotnet\dotnet.exe' build src/YowThi.RuntimeSupervisor/YowThi.RuntimeSupervisor.csproj --configuration Release --nologo
+        run: '"C:\Program Files\dotnet\dotnet.exe" build src\YowThi.RuntimeSupervisor\YowThi.RuntimeSupervisor.csproj --configuration Release --nologo'
 
   updater-build:
     runs-on: [self-hosted, yowthi-erp-v2]
@@ -54,9 +52,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Build Runtime Supervisor Updater
-        shell: powershell
-        run: |
-          & 'C:\Program Files\dotnet\dotnet.exe' build src/YowThi.RuntimeSupervisorUpdater/YowThi.RuntimeSupervisorUpdater.csproj --configuration Release --nologo
+        run: '"C:\Program Files\dotnet\dotnet.exe" build src\YowThi.RuntimeSupervisorUpdater\YowThi.RuntimeSupervisorUpdater.csproj --configuration Release --nologo'
 
   acceptance-tests:
     runs-on: [self-hosted, yowthi-erp-v2]
@@ -65,6 +61,4 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Run .NET acceptance tests
-        shell: powershell
-        run: |
-          & 'C:\Program Files\dotnet\dotnet.exe' test src/YowThi.DotnetAcceptanceTests/YowThi.DotnetAcceptanceTests.csproj --configuration Release --nologo --verbosity normal
+        run: '"C:\Program Files\dotnet\dotnet.exe" test src\YowThi.DotnetAcceptanceTests\YowThi.DotnetAcceptanceTests.csproj --configuration Release --nologo --verbosity normal'
