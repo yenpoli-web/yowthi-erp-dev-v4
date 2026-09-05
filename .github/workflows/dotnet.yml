@@ -14,24 +14,47 @@ env:
   DOTNET_CLI_TELEMETRY_OPTOUT: '1'
 
 jobs:
-  validation:
+  environment:
     runs-on: [self-hosted, yowthi-erp-v2]
-    timeout-minutes: 20
+    timeout-minutes: 5
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Show .NET SDK
         run: dotnet --info
 
+  agent-build:
+    runs-on: [self-hosted, yowthi-erp-v2]
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
       - name: Build Development Agent
         run: dotnet build src/YowThi.DevelopmentAgent3/YowThi.DevelopmentAgent3.csproj --configuration Release --nologo
 
+  supervisor-build:
+    runs-on: [self-hosted, yowthi-erp-v2]
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
       - name: Build Runtime Supervisor
         run: dotnet build src/YowThi.RuntimeSupervisor/YowThi.RuntimeSupervisor.csproj --configuration Release --nologo
 
+  updater-build:
+    runs-on: [self-hosted, yowthi-erp-v2]
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
       - name: Build Runtime Supervisor Updater
         run: dotnet build src/YowThi.RuntimeSupervisorUpdater/YowThi.RuntimeSupervisorUpdater.csproj --configuration Release --nologo
 
+  acceptance-tests:
+    runs-on: [self-hosted, yowthi-erp-v2]
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
       - name: Run .NET acceptance tests
         run: dotnet test src/YowThi.DotnetAcceptanceTests/YowThi.DotnetAcceptanceTests.csproj --configuration Release --nologo --verbosity normal
