@@ -19,7 +19,7 @@ env:
 
 jobs:
   environment:
-    runs-on: [self-hosted, yowthi-erp-v2]
+    runs-on: [self-hosted, yowthi-erp-dev-v4]
     timeout-minutes: 5
     steps:
       - name: Checkout
@@ -28,7 +28,7 @@ jobs:
         run: '"C:\Program Files\dotnet\dotnet.exe" --info'
 
   agent-build:
-    runs-on: [self-hosted, yowthi-erp-v2]
+    runs-on: [self-hosted, yowthi-erp-dev-v4]
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -37,7 +37,7 @@ jobs:
         run: '"C:\Program Files\dotnet\dotnet.exe" build src\YowThi.DevelopmentAgent3\YowThi.DevelopmentAgent3.csproj --configuration Release --nologo'
 
   supervisor-build:
-    runs-on: [self-hosted, yowthi-erp-v2]
+    runs-on: [self-hosted, yowthi-erp-dev-v4]
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -46,7 +46,7 @@ jobs:
         run: '"C:\Program Files\dotnet\dotnet.exe" build src\YowThi.RuntimeSupervisor\YowThi.RuntimeSupervisor.csproj --configuration Release --nologo'
 
   updater-build:
-    runs-on: [self-hosted, yowthi-erp-v2]
+    runs-on: [self-hosted, yowthi-erp-dev-v4]
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -55,7 +55,7 @@ jobs:
         run: '"C:\Program Files\dotnet\dotnet.exe" build src\YowThi.RuntimeSupervisorUpdater\YowThi.RuntimeSupervisorUpdater.csproj --configuration Release --nologo'
 
   acceptance-tests:
-    runs-on: [self-hosted, yowthi-erp-v2]
+    runs-on: [self-hosted, yowthi-erp-dev-v4]
     timeout-minutes: 10
     steps:
       - name: Checkout

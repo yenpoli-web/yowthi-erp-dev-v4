@@ -150,7 +150,7 @@ public static class GitHubActionsTools
                 ? labelsElement.EnumerateArray().Select(x => x.GetString()).Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x!).ToArray()
                 : Array.Empty<string>();
             var hasSelfHosted = labels.Contains("self-hosted", StringComparer.OrdinalIgnoreCase);
-            var hasYowThiRunner = labels.Contains("yowthi-erp-v2", StringComparer.OrdinalIgnoreCase);
+            var hasYowThiRunner = labels.Contains("yowthi-erp-dev-v4", StringComparer.OrdinalIgnoreCase);
             var jobStatus = job.TryGetProperty("status", out var jobStatusElement) ? jobStatusElement.GetString() : null;
             var jobConclusion = job.TryGetProperty("conclusion", out var jobConclusionElement) ? jobConclusionElement.GetString() : null;
             jobs.Add(new GitHubWorkflowJobEvidence(
