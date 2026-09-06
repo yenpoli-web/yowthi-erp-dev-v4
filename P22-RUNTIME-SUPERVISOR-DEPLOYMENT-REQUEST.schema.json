@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:yowthi:runtime-supervisor:deployment-request:v1",
+  "title": "YowThi Runtime Supervisor Deployment Request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "requestId",
+    "releaseName",
+    "currentRuntimeDll",
+    "currentRuntimeSha256",
+    "currentProcessId",
+    "targetRuntimeDll",
+    "targetRuntimeSha256",
+    "listenUrl",
+    "healthUrl",
+    "supervisorExe",
+    "supervisorSha256",
+    "processAuthorization",
+    "requiresDedicatedSupervisorExecutor",
+    "createdUtc",
+    "expiresUtc"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "requestId": { "type": "string", "pattern": "^[0-9a-fA-F]{32}$" },
+    "releaseName": { "type": "string", "pattern": "^r[0-9]+$" },
+    "currentRuntimeDll": { "type": "string", "minLength": 1 },
+    "currentRuntimeSha256": { "$ref": "#/$defs/sha256" },
+    "currentProcessId": { "type": "integer", "minimum": 1 },
+    "targetRuntimeDll": { "type": "string", "minLength": 1 },
+    "targetRuntimeSha256": { "$ref": "#/$defs/sha256" },
+    "listenUrl": { "type": "string", "pattern": "^http://(127\\.0\\.0\\.1|localhost)(:[0-9]{1,5})?(/.*)?$" },
+    "healthUrl": { "type": "string", "pattern": "^http://(127\\.0\\.0\\.1|localhost)(:[0-9]{1,5})?(/.*)?$" },
+    "supervisorExe": { "type": "string", "minLength": 1 },
+    "supervisorSha256": { "$ref": "#/$defs/sha256" },
+    "processAuthorization": { "const": false },
+    "requiresDedicatedSupervisorExecutor": { "const": true },
+    "createdUtc": { "type": "string", "format": "date-time" },
+    "expiresUtc": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9A-Fa-f]{64}$"
+    }
+  }
+}
