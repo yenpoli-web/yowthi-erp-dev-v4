@@ -54,6 +54,15 @@ jobs:
       - name: Build Runtime Supervisor Updater
         run: '"C:\Program Files\dotnet\dotnet.exe" build src\YowThi.RuntimeSupervisorUpdater\YowThi.RuntimeSupervisorUpdater.csproj --configuration Release --nologo'
 
+  deployment-executor-build:
+    runs-on: [self-hosted, yowthi-erp-dev-v4]
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Build Runtime Deployment Executor
+        run: '"C:\Program Files\dotnet\dotnet.exe" build src\YowThi.RuntimeDeploymentExecutor\YowThi.RuntimeDeploymentExecutor.csproj --configuration Release --nologo'
+
   acceptance-tests:
     runs-on: [self-hosted, yowthi-erp-dev-v4]
     timeout-minutes: 10
