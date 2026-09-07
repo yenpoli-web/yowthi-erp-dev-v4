@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yowthi.local/schemas/p29-runtime-deployment-approval.schema.json",
+  "title": "YowThi P29 Runtime Deployment Approval",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion","approvalId","requestId","requestSha256","executorSha256","signerKeyId","issuedUtc","expiresUtc","nonce","signatureBase64"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "approvalId": { "type": "string", "pattern": "^[0-9A-Fa-f]{32}$" },
+    "requestId": { "type": "string", "pattern": "^[0-9A-Fa-f]{32}$" },
+    "requestSha256": { "type": "string", "pattern": "^[0-9A-Fa-f]{64}$" },
+    "executorSha256": { "type": "string", "pattern": "^[0-9A-Fa-f]{64}$" },
+    "signerKeyId": { "const": "p30-runtime-deployment-signer-v1" },
+    "issuedUtc": { "type": "string", "format": "date-time" },
+    "expiresUtc": { "type": "string", "format": "date-time" },
+    "nonce": { "type": "string", "pattern": "^[0-9A-Fa-f]{32}$" },
+    "signatureBase64": { "type": "string", "minLength": 8, "maxLength": 512 }
+  }
+}
