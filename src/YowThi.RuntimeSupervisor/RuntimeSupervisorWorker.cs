@@ -12,9 +12,6 @@ public sealed class RuntimeSupervisorWorker(ILogger<RuntimeSupervisorWorker> log
 {
     private const string DevRoot = @"C:\Dev\YowThi-ERP-Dev-v4";
     private const string ReleaseRoot = DevRoot + @"\acceptance\agent-lifecycle\releases";
-    private const string PendingRoot = DevRoot + @"\.agent3-handoff\pending";
-    private const string ActivatedRoot = DevRoot + @"\.agent3-handoff\activated";
-    private const string FailedRoot = DevRoot + @"\.agent3-handoff\failed";
     private const string ActiveStatePath = DevRoot + @"\.agent3-handoff\active-runtime.json";
     private const string LegacyStatePath = DevRoot + @"\.agent3-handoff\runtime-state.json";
     private const string DotnetExe = @"C:\Program Files\dotnet\dotnet.exe";
@@ -36,10 +33,6 @@ public sealed class RuntimeSupervisorWorker(ILogger<RuntimeSupervisorWorker> log
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        Directory.CreateDirectory(PendingRoot);
-        Directory.CreateDirectory(ActivatedRoot);
-        Directory.CreateDirectory(FailedRoot);
-
         _active = await LoadOrImportActiveStateAsync(stoppingToken);
         if (_active is not null)
         {
@@ -51,23 +44,6 @@ public sealed class RuntimeSupervisorWorker(ILogger<RuntimeSupervisorWorker> log
         {
             try
             {
-                var pending = Directory.EnumerateFiles(PendingRoot, "*.json", SearchOption.TopDirectoryOnly)
-                    .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
-                    .FirstOrDefault();
-
-                if (pending is not null)
-                {
-                    if (await ManifestEndpointIsHealthyAsync(pending, stoppingToken))
-                    {
-                        // Never consume a handoff while the current runtime still owns the target endpoint.
-                        await Task.Delay(500, stoppingToken);
-                        continue;
-                    }
-
-                    await ActivatePendingAsync(pending, stoppingToken);
-                    continue;
-                }
-
                 if (_active is not null)
                 {
                     if (!await IsHealthyAsync(_active.Current, stoppingToken))
@@ -99,6 +75,7 @@ public sealed class RuntimeSupervisorWorker(ILogger<RuntimeSupervisorWorker> log
     {
         if (File.Exists(ActiveStatePath))
         {
+            RejectReparse(ActiveStatePath);
             var active = JsonSerializer.Deserialize<ActiveState>(await File.ReadAllTextAsync(ActiveStatePath, token), JsonOptions)
                 ?? throw new InvalidDataException("Invalid active runtime state.");
             ValidateSlot(active.Current);
@@ -107,6 +84,7 @@ public sealed class RuntimeSupervisorWorker(ILogger<RuntimeSupervisorWorker> log
         }
 
         if (!File.Exists(LegacyStatePath)) return null;
+        RejectReparse(LegacyStatePath);
         var legacy = JsonSerializer.Deserialize<LegacyState>(await File.ReadAllTextAsync(LegacyStatePath, token), JsonOptions);
         var imported = legacy?.candidateSlot ?? legacy?.currentSlot;
         if (imported is null) return null;
@@ -129,6 +107,11 @@ public sealed class RuntimeSupervisorWorker(ILogger<RuntimeSupervisorWorker> log
         if (_ownedRuntime is { HasExited: false })
         {
             try { _ownedRuntime.Kill(entireProcessTree: true); _ownedRuntime.WaitForExit(5000); } catch { }
+            _ownedRuntime.Dispose();
+            _ownedRuntime = null;
+        }
+        else if (_ownedRuntime is not null)
+        {
             _ownedRuntime.Dispose();
             _ownedRuntime = null;
         }
@@ -192,92 +175,26 @@ public sealed class RuntimeSupervisorWorker(ILogger<RuntimeSupervisorWorker> log
         logger.LogInformation("Recovered V4 tunnel pid={Pid}.", _ownedTunnel.Id);
     }
 
-    private async Task ActivatePendingAsync(string manifestPath, CancellationToken token)
-    {
-        Process? started = null;
-        var previous = _active;
-        try
-        {
-            var manifest = JsonSerializer.Deserialize<HandoffManifest>(await File.ReadAllTextAsync(manifestPath, token), JsonOptions)
-                ?? throw new InvalidDataException("Invalid handoff manifest.");
-            var slot = SlotFromManifest(manifest);
-            ValidateSlot(slot);
-
-            started = StartRuntime(slot);
-            if (!await WaitHealthyAsync(slot, started, token))
-                throw new InvalidOperationException("Candidate runtime failed health validation.");
-
-            var activated = slot with { ProcessId = started.Id };
-            _active = new ActiveState(2, activated, previous?.Current, DateTimeOffset.UtcNow);
-            WriteActiveState(_active);
-            _ownedRuntime = started;
-            started = null;
-
-            MoveManifest(manifestPath, ActivatedRoot, new
-            {
-                status = "activated",
-                pid = activated.ProcessId,
-                runtimeSha256 = activated.RuntimeSha256,
-                activatedUtc = DateTimeOffset.UtcNow
-            });
-
-            await EnsureTunnelAsync(token);
-        }
-        catch (Exception ex)
-        {
-            try
-            {
-                if (started is { HasExited: false })
-                {
-                    started.Kill(entireProcessTree: true);
-                    await started.WaitForExitAsync(token);
-                }
-            }
-            catch { }
-            started?.Dispose();
-
-            try { MoveManifest(manifestPath, FailedRoot, new { status = "failed", error = ex.GetType().Name + ": " + ex.Message, failedUtc = DateTimeOffset.UtcNow }); }
-            catch { }
-
-            _active = previous;
-            if (_active is not null && !await IsHealthyAsync(_active.Current, token))
-            {
-                try { await EnsureActiveRuntimeAsync(token); }
-                catch (Exception recoveryEx) { logger.LogError(recoveryEx, "Rollback recovery failed."); }
-            }
-        }
-    }
-
-    private async Task<bool> ManifestEndpointIsHealthyAsync(string manifestPath, CancellationToken token)
-    {
-        try
-        {
-            var manifest = JsonSerializer.Deserialize<HandoffManifest>(await File.ReadAllTextAsync(manifestPath, token), JsonOptions);
-            if (manifest?.healthUrl is null) return false;
-            using var response = await _http.GetAsync(RequireLoopbackHttp(manifest.healthUrl, "healthUrl"), token);
-            return response.IsSuccessStatusCode;
-        }
-        catch { return false; }
-    }
-
     private async Task<bool> IsHealthyAsync(RuntimeSlot slot, CancellationToken token)
     {
         try
         {
             using var response = await _http.GetAsync(RequireLoopbackHttp(slot.HealthUrl, "healthUrl"), token);
             if (!response.IsSuccessStatusCode) return false;
+
             var body = await response.Content.ReadAsStringAsync(token);
-            if (string.IsNullOrWhiteSpace(body)) return true;
-            try
-            {
-                using var doc = JsonDocument.Parse(body);
-                if (doc.RootElement.TryGetProperty("runtimeSha256", out var sha) && sha.ValueKind == JsonValueKind.String)
-                    return string.Equals(sha.GetString(), slot.RuntimeSha256, StringComparison.OrdinalIgnoreCase);
-            }
-            catch (JsonException) { }
-            return true;
+            if (string.IsNullOrWhiteSpace(body)) return false;
+
+            using var doc = JsonDocument.Parse(body);
+            if (!doc.RootElement.TryGetProperty("runtimeSha256", out var sha) || sha.ValueKind != JsonValueKind.String)
+                return false;
+
+            return string.Equals(sha.GetString(), slot.RuntimeSha256, StringComparison.OrdinalIgnoreCase);
         }
-        catch { return false; }
+        catch
+        {
+            return false;
+        }
     }
 
     private static async Task<bool> IsTunnelReadyAsync(CancellationToken token)
@@ -318,6 +235,7 @@ public sealed class RuntimeSupervisorWorker(ILogger<RuntimeSupervisorWorker> log
     private static Process StartRuntime(RuntimeSlot slot)
     {
         ValidateSlot(slot);
+        ValidateDotnetHost();
         var psi = new ProcessStartInfo
         {
             FileName = DotnetExe,
@@ -355,6 +273,14 @@ public sealed class RuntimeSupervisorWorker(ILogger<RuntimeSupervisorWorker> log
         {
             runtimeKey = string.Empty;
         }
+    }
+
+    private static void ValidateDotnetHost()
+    {
+        var full = Path.GetFullPath(DotnetExe);
+        if (!File.Exists(full)) throw new FileNotFoundException("dotnet host does not exist.", full);
+        if ((File.GetAttributes(full) & FileAttributes.ReparsePoint) != 0)
+            throw new UnauthorizedAccessException("dotnet host may not be a reparse point.");
     }
 
     private static void ValidateTunnelArtifacts()
@@ -401,15 +327,6 @@ public sealed class RuntimeSupervisorWorker(ILogger<RuntimeSupervisorWorker> log
         return value;
     }
 
-    private static RuntimeSlot SlotFromManifest(HandoffManifest manifest)
-    {
-        var runtimeDll = Path.GetFullPath(manifest.runtimeDll ?? throw new InvalidDataException("runtimeDll is required."));
-        var listen = RequireLoopbackHttp(manifest.listenUrl, "listenUrl").ToString().TrimEnd('/');
-        var health = RequireLoopbackHttp(manifest.healthUrl, "healthUrl").ToString().TrimEnd('/');
-        return new RuntimeSlot(manifest.planId, runtimeDll,
-            manifest.runtimeSha256 ?? throw new InvalidDataException("runtimeSha256 is required."), listen, health, 0);
-    }
-
     private static void ValidateSlot(RuntimeSlot slot)
     {
         var runtimeDll = Path.GetFullPath(slot.RuntimeDll);
@@ -442,6 +359,7 @@ public sealed class RuntimeSupervisorWorker(ILogger<RuntimeSupervisorWorker> log
     private static void WriteActiveState(ActiveState state)
     {
         ValidateSlot(state.Current);
+        if (state.Previous is not null) ValidateSlot(state.Previous);
         var temp = ActiveStatePath + ".tmp";
         File.WriteAllText(temp, JsonSerializer.Serialize(state, JsonOptions));
         File.Move(temp, ActiveStatePath, overwrite: true);
@@ -456,16 +374,6 @@ public sealed class RuntimeSupervisorWorker(ILogger<RuntimeSupervisorWorker> log
     }
 
     private static string NormalizeUrl(string value) => value.TrimEnd('/');
-
-    private static void MoveManifest(string source, string destinationRoot, object result)
-    {
-        Directory.CreateDirectory(destinationRoot);
-        var destination = Path.Combine(destinationRoot, Path.GetFileName(source));
-        var resultPath = source + ".result";
-        File.WriteAllText(resultPath, JsonSerializer.Serialize(result, JsonOptions));
-        File.Move(source, destination, overwrite: true);
-        File.Move(resultPath, destination + ".result", overwrite: true);
-    }
 
     private void StopOwnedTunnel()
     {
@@ -497,7 +405,6 @@ public sealed class RuntimeSupervisorWorker(ILogger<RuntimeSupervisorWorker> log
         _ownedRuntime = null;
     }
 
-    private sealed record HandoffManifest(int schemaVersion, string? planId, string? runtimeDll, string? runtimeSha256, string? listenUrl, string? healthUrl, DateTimeOffset stagedUtc);
     private sealed record LegacySlot(string? planId, string runtimeDll, string runtimeSha256, string listenUrl, int processId);
     private sealed record LegacyState(int schemaVersion, LegacySlot? currentSlot, LegacySlot? previousSlot, LegacySlot? candidateSlot, DateTimeOffset? candidateActivatedUtc, DateTimeOffset? rollbackUntilUtc, bool cutoverConfirmed, DateTimeOffset updatedUtc);
     private sealed record RuntimeSlot(string? PlanId, string RuntimeDll, string RuntimeSha256, string ListenUrl, string HealthUrl, int ProcessId);
