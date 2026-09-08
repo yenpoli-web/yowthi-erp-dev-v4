@@ -4,6 +4,8 @@ namespace YowThi.DotnetAcceptanceTests;
 
 public sealed class RuntimeDeploymentExecutorContractTests
 {
+    private const string AuthorizerSha = "7BD1F5AEFD057B06E420C2A4E20E7A3BB5A3A9F28C9A0AE324AF4F19A11E9AFE";
+
     [Fact]
     public void ExecutorSource_RequiresSeparatedAuthorizationAndExactIdentityBindings()
     {
@@ -22,15 +24,15 @@ public sealed class RuntimeDeploymentExecutorContractTests
     }
 
     [Fact]
-    public void AuthorizerParentGuard_BlocksDirectOrUnprovisionedExecution()
+    public void AuthorizerParentGuard_BlocksDirectOrWrongAuthorizerExecution()
     {
         var guard = ReadAuthorizerGuardSource();
 
         Assert.Contains("[ModuleInitializer]", guard, StringComparison.Ordinal);
         Assert.Contains("C:\\ProgramData\\YowThi\\RuntimeDeployment\\YowThi.RuntimeDeploymentAuthorizer.exe", guard, StringComparison.Ordinal);
         Assert.Contains("ExpectedAuthorizerExeSha256", guard, StringComparison.Ordinal);
-        Assert.Contains("0000000000000000000000000000000000000000000000000000000000000000", guard, StringComparison.Ordinal);
-        Assert.Contains("authorizer identity is not provisioned", guard, StringComparison.Ordinal);
+        Assert.Contains(AuthorizerSha, guard, StringComparison.Ordinal);
+        Assert.DoesNotContain("ExpectedAuthorizerExeSha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"", guard, StringComparison.Ordinal);
         Assert.Contains("GetParentProcessId", guard, StringComparison.Ordinal);
         Assert.Contains("NtQueryInformationProcess", guard, StringComparison.Ordinal);
         Assert.Contains("parent.MainModule?.FileName", guard, StringComparison.Ordinal);

@@ -4,22 +4,25 @@ namespace YowThi.DotnetAcceptanceTests;
 
 public sealed class RuntimeDeploymentSignerContractTests
 {
+    private const string SignerSpkiSha = "3794BFF6F3FEB5B64F58A85F1CD9E4C526ACBFBDF2B51E25A27CEAF88124981A";
+    private const string BridgeSha = "9FF4EAF2A642DEF2013ACF2356440E7B51B24A476303E7D91B1228D250337EF5";
+    private const string AuthorizerSha = "7BD1F5AEFD057B06E420C2A4E20E7A3BB5A3A9F28C9A0AE324AF4F19A11E9AFE";
+
     [Fact]
-    public void ApprovalBridgeParentGuard_IsFailClosedUntilP31BridgeIsProvisioned()
+    public void ApprovalBridgeParentGuard_IsPinnedToReviewedP31Bridge()
     {
         var source = ReadSignerSource("ApprovalBridgeParentGuard.cs");
         Assert.Contains("[ModuleInitializer]", source, StringComparison.Ordinal);
         Assert.Contains("C:\\ProgramData\\YowThi\\RuntimeDeployment\\YowThi.RuntimeDeploymentApprovalBridge.exe", source, StringComparison.Ordinal);
-        Assert.Contains("ExpectedApprovalBridgeExeSha256", source, StringComparison.Ordinal);
-        Assert.Contains("0000000000000000000000000000000000000000000000000000000000000000", source, StringComparison.Ordinal);
-        Assert.Contains("approval bridge identity is not provisioned", source, StringComparison.Ordinal);
+        Assert.Contains(BridgeSha, source, StringComparison.Ordinal);
         Assert.Contains("NtQueryInformationProcess", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("ExpectedApprovalBridgeExeSha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"", source, StringComparison.Ordinal);
         Assert.DoesNotContain("Process.Start", source, StringComparison.Ordinal);
         Assert.DoesNotContain(".Kill(", source, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void SigningKeyGate_UsesNonExportableCurrentUserCngEcdsaP256AndFailsClosed()
+    public void SigningKeyGate_UsesPinnedNonExportableCurrentUserCngEcdsaP256()
     {
         var source = ReadSignerSource("SigningKeyGate.cs");
         Assert.Contains("YowThiRuntimeDeploymentSignerV1", source, StringComparison.Ordinal);
@@ -32,8 +35,8 @@ public sealed class RuntimeDeploymentSignerContractTests
         Assert.Contains("new ECDsaCng(key)", source, StringComparison.Ordinal);
         Assert.Contains("ecdsa.KeySize != 256", source, StringComparison.Ordinal);
         Assert.Contains("ExportSubjectPublicKeyInfo", source, StringComparison.Ordinal);
-        Assert.Contains("0000000000000000000000000000000000000000000000000000000000000000", source, StringComparison.Ordinal);
-        Assert.Contains("signer key identity is not provisioned", source, StringComparison.Ordinal);
+        Assert.Contains(SignerSpkiSha, source, StringComparison.Ordinal);
+        Assert.DoesNotContain("ExpectedSignerSpkiSha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"", source, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -89,15 +92,13 @@ public sealed class RuntimeDeploymentSignerContractTests
     }
 
     [Fact]
-    public void P28AndP29Guards_RemainUnprovisionedUntilInteractiveProvisioningCompletes()
+    public void P28AndP29Guards_ArePinnedToProvisionedP31Identities()
     {
         var p28 = File.ReadAllText(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "YowThi.RuntimeDeploymentExecutor", "AuthorizerParentGuard.cs")));
         var p29 = File.ReadAllText(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "YowThi.RuntimeDeploymentAuthorizer", "ApprovalSignatureGate.cs")));
-        const string zero = "0000000000000000000000000000000000000000000000000000000000000000";
-        Assert.Contains(zero, p28, StringComparison.Ordinal);
-        Assert.Contains("authorizer identity is not provisioned", p28, StringComparison.Ordinal);
-        Assert.Contains(zero, p29, StringComparison.Ordinal);
-        Assert.Contains("SignerPublicKeySpkiBase64 = \"\"", p29, StringComparison.Ordinal);
+        Assert.Contains(AuthorizerSha, p28, StringComparison.Ordinal);
+        Assert.Contains(SignerSpkiSha, p29, StringComparison.Ordinal);
+        Assert.Contains("MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcD", p29, StringComparison.Ordinal);
         Assert.Contains("p31-runtime-deployment-signer-user-v1", p29, StringComparison.Ordinal);
     }
 

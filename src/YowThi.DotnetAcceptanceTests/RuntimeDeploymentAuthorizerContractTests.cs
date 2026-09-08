@@ -4,14 +4,18 @@ namespace YowThi.DotnetAcceptanceTests;
 
 public sealed class RuntimeDeploymentAuthorizerContractTests
 {
+    private const string SignerSpkiSha = "3794BFF6F3FEB5B64F58A85F1CD9E4C526ACBFBDF2B51E25A27CEAF88124981A";
+    private const string AuthorizerSha = "7BD1F5AEFD057B06E420C2A4E20E7A3BB5A3A9F28C9A0AE324AF4F19A11E9AFE";
+
     [Fact]
-    public void ApprovalSignatureGate_IsEcdsaP256AndFailClosedUntilInteractiveProvisioning()
+    public void ApprovalSignatureGate_IsPinnedToProvisionedCurrentUserEcdsaP256()
     {
         var source = ReadAuthorizerSource("ApprovalSignatureGate.cs");
         Assert.Contains("[ModuleInitializer]", source, StringComparison.Ordinal);
-        Assert.Contains("SignerPublicKeySpkiBase64 = \"\"", source, StringComparison.Ordinal);
-        Assert.Contains("0000000000000000000000000000000000000000000000000000000000000000", source, StringComparison.Ordinal);
-        Assert.Contains("Runtime deployment approval signer is not provisioned", source, StringComparison.Ordinal);
+        Assert.Contains(SignerSpkiSha, source, StringComparison.Ordinal);
+        Assert.Contains("MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcD", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("SignerPublicKeySpkiBase64 = \"\"", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("ExpectedSignerSpkiSha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"", source, StringComparison.Ordinal);
         Assert.Contains("ECDsa.Create()", source, StringComparison.Ordinal);
         Assert.Contains("ImportSubjectPublicKeyInfo", source, StringComparison.Ordinal);
         Assert.Contains("ecdsa.KeySize != 256", source, StringComparison.Ordinal);
@@ -57,12 +61,12 @@ public sealed class RuntimeDeploymentAuthorizerContractTests
     }
 
     [Fact]
-    public void P28ParentGuard_RemainsUnprovisionedUntilVerifiedAuthorizerArtifactExists()
+    public void P28ParentGuard_IsPinnedToVerifiedAuthorizerArtifact()
     {
         var guard = File.ReadAllText(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "YowThi.RuntimeDeploymentExecutor", "AuthorizerParentGuard.cs")));
         Assert.Contains("YowThi.RuntimeDeploymentAuthorizer.exe", guard, StringComparison.Ordinal);
-        Assert.Contains("0000000000000000000000000000000000000000000000000000000000000000", guard, StringComparison.Ordinal);
-        Assert.Contains("authorizer identity is not provisioned", guard, StringComparison.Ordinal);
+        Assert.Contains(AuthorizerSha, guard, StringComparison.Ordinal);
+        Assert.DoesNotContain("ExpectedAuthorizerExeSha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"", guard, StringComparison.Ordinal);
     }
 
     [Fact]

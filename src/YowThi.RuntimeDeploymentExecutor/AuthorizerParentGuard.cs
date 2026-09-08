@@ -8,10 +8,7 @@ namespace YowThi.RuntimeDeploymentExecutor;
 internal static class AuthorizerParentGuard
 {
     private const string AuthorizerExe = @"C:\ProgramData\YowThi\RuntimeDeployment\YowThi.RuntimeDeploymentAuthorizer.exe";
-
-    // P28 intentionally ships unprovisioned. P29 must replace this sentinel with the
-    // exact SHA-256 of the independently reviewed local authorizer before deployment.
-    private const string ExpectedAuthorizerExeSha256 = "0000000000000000000000000000000000000000000000000000000000000000";
+    private const string ExpectedAuthorizerExeSha256 = "7BD1F5AEFD057B06E420C2A4E20E7A3BB5A3A9F28C9A0AE324AF4F19A11E9AFE";
 
     [ModuleInitializer]
     internal static void ValidateAtModuleLoad()
@@ -42,12 +39,7 @@ internal static class AuthorizerParentGuard
     {
         using var current = Process.GetCurrentProcess();
         var info = new PROCESS_BASIC_INFORMATION();
-        var status = NtQueryInformationProcess(
-            current.Handle,
-            0,
-            ref info,
-            Marshal.SizeOf<PROCESS_BASIC_INFORMATION>(),
-            out _);
+        var status = NtQueryInformationProcess(current.Handle, 0, ref info, Marshal.SizeOf<PROCESS_BASIC_INFORMATION>(), out _);
         if (status != 0 || info.InheritedFromUniqueProcessId == IntPtr.Zero)
             throw new UnauthorizedAccessException("Unable to establish runtime deployment executor parent process identity.");
 
@@ -69,10 +61,5 @@ internal static class AuthorizerParentGuard
     }
 
     [DllImport("ntdll.dll")]
-    private static extern int NtQueryInformationProcess(
-        IntPtr processHandle,
-        int processInformationClass,
-        ref PROCESS_BASIC_INFORMATION processInformation,
-        int processInformationLength,
-        out int returnLength);
+    private static extern int NtQueryInformationProcess(IntPtr processHandle, int processInformationClass, ref PROCESS_BASIC_INFORMATION processInformation, int processInformationLength, out int returnLength);
 }

@@ -8,10 +8,8 @@ internal static class SigningKeyGate
     internal const string KeyName = "YowThiRuntimeDeploymentSignerV1";
     internal const string SignerKeyId = "p31-runtime-deployment-signer-user-v1";
 
-    // P31 hardening: the signer key is CurrentUser-scoped and may only be reached through
-    // the active-console approval bridge. The exact public SPKI SHA remains fail-closed
-    // until the interactive key provisioner has produced a reviewed public receipt.
-    internal const string ExpectedSignerSpkiSha256 = "0000000000000000000000000000000000000000000000000000000000000000";
+    // Provisioned P31 CurrentUser ECDSA P-256 public identity.
+    internal const string ExpectedSignerSpkiSha256 = "3794BFF6F3FEB5B64F58A85F1CD9E4C526ACBFBDF2B51E25A27CEAF88124981A";
 
     [ModuleInitializer]
     internal static void ValidateAtModuleLoad()

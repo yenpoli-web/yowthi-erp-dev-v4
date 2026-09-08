@@ -8,10 +8,7 @@ namespace YowThi.RuntimeDeploymentSigner;
 internal static class ApprovalBridgeParentGuard
 {
     internal const string ApprovalBridgeExe = @"C:\ProgramData\YowThi\RuntimeDeployment\YowThi.RuntimeDeploymentApprovalBridge.exe";
-
-    // P30 intentionally ships unprovisioned. P31 must replace this sentinel with the
-    // exact SHA-256 of the independently reviewed local approval bridge.
-    internal const string ExpectedApprovalBridgeExeSha256 = "0000000000000000000000000000000000000000000000000000000000000000";
+    internal const string ExpectedApprovalBridgeExeSha256 = "9FF4EAF2A642DEF2013ACF2356440E7B51B24A476303E7D91B1228D250337EF5";
 
     [ModuleInitializer]
     internal static void ValidateAtModuleLoad()
@@ -42,12 +39,7 @@ internal static class ApprovalBridgeParentGuard
     {
         using var current = Process.GetCurrentProcess();
         var info = new PROCESS_BASIC_INFORMATION();
-        var status = NtQueryInformationProcess(
-            current.Handle,
-            0,
-            ref info,
-            Marshal.SizeOf<PROCESS_BASIC_INFORMATION>(),
-            out _);
+        var status = NtQueryInformationProcess(current.Handle, 0, ref info, Marshal.SizeOf<PROCESS_BASIC_INFORMATION>(), out _);
         if (status != 0 || info.InheritedFromUniqueProcessId == IntPtr.Zero)
             throw new UnauthorizedAccessException("Unable to establish runtime deployment signer parent process identity.");
 
@@ -69,10 +61,5 @@ internal static class ApprovalBridgeParentGuard
     }
 
     [DllImport("ntdll.dll")]
-    private static extern int NtQueryInformationProcess(
-        IntPtr processHandle,
-        int processInformationClass,
-        ref PROCESS_BASIC_INFORMATION processInformation,
-        int processInformationLength,
-        out int returnLength);
+    private static extern int NtQueryInformationProcess(IntPtr processHandle, int processInformationClass, ref PROCESS_BASIC_INFORMATION processInformation, int processInformationLength, out int returnLength);
 }
