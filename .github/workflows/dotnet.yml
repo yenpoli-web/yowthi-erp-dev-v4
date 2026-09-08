@@ -72,6 +72,15 @@ jobs:
       - name: Build Runtime Deployment Authorizer
         run: '"C:\Program Files\dotnet\dotnet.exe" build src\YowThi.RuntimeDeploymentAuthorizer\YowThi.RuntimeDeploymentAuthorizer.csproj --configuration Release --nologo'
 
+  deployment-signer-build:
+    runs-on: [self-hosted, yowthi-erp-dev-v4]
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Build Runtime Deployment Signer
+        run: '"C:\Program Files\dotnet\dotnet.exe" build src\YowThi.RuntimeDeploymentSigner\YowThi.RuntimeDeploymentSigner.csproj --configuration Release --nologo'
+
   acceptance-tests:
     runs-on: [self-hosted, yowthi-erp-dev-v4]
     timeout-minutes: 10
