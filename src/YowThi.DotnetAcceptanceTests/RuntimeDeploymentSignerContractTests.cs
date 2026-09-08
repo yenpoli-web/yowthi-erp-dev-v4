@@ -5,8 +5,10 @@ namespace YowThi.DotnetAcceptanceTests;
 public sealed class RuntimeDeploymentSignerContractTests
 {
     private const string SignerSpkiSha = "3794BFF6F3FEB5B64F58A85F1CD9E4C526ACBFBDF2B51E25A27CEAF88124981A";
-    private const string BridgeSha = "EAA32076285F957FB08A5D34C5252DF95F546981F51EFF5681BBEAF60A6A6AAB";
-    private const string AuthorizerSha = "EC6CAE1D23127EA59D67F5EB3C380B59144C24A47B6C974350313501B4FD17CD";
+    private const string BridgeExeSha = "D5DBDC7F12FEA22C0DBB140D0809381F70754DAC3BECA02F83519EFA74CA431B";
+    private const string BridgeDllSha = "8E9BA46CB8BC950475AA01612DE7C24C104B06D3B0B74EA6C19E3A6EC6C20E99";
+    private const string AuthorizerExeSha = "61587C8AE9A58BDA0BD68199A99FBD4D60A544E70690730127E81F57FBF3408E";
+    private const string AuthorizerDllSha = "CB9A4EA443CD98E33AFE7AD8BD81B05C5AF827DD35281253F5DBB4BB87B744A6";
 
     [Fact]
     public void ApprovalBridgeParentGuard_IsPinnedToReviewedP31Bridge()
@@ -14,9 +16,12 @@ public sealed class RuntimeDeploymentSignerContractTests
         var source = ReadSignerSource("ApprovalBridgeParentGuard.cs");
         Assert.Contains("[ModuleInitializer]", source, StringComparison.Ordinal);
         Assert.Contains("C:\\ProgramData\\YowThi\\RuntimeDeployment\\YowThi.RuntimeDeploymentApprovalBridge.exe", source, StringComparison.Ordinal);
-        Assert.Contains(BridgeSha, source, StringComparison.Ordinal);
+        Assert.Contains("C:\\ProgramData\\YowThi\\RuntimeDeployment\\YowThi.RuntimeDeploymentApprovalBridge.dll", source, StringComparison.Ordinal);
+        Assert.Contains(BridgeExeSha, source, StringComparison.Ordinal);
+        Assert.Contains(BridgeDllSha, source, StringComparison.Ordinal);
         Assert.Contains("NtQueryInformationProcess", source, StringComparison.Ordinal);
         Assert.DoesNotContain("ExpectedApprovalBridgeExeSha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("ExpectedApprovalBridgeDllSha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"", source, StringComparison.Ordinal);
         Assert.DoesNotContain("Process.Start", source, StringComparison.Ordinal);
         Assert.DoesNotContain(".Kill(", source, StringComparison.Ordinal);
     }
@@ -49,7 +54,9 @@ public sealed class RuntimeDeploymentSignerContractTests
         Assert.Contains("!request.RequiresDedicatedSupervisorExecutor", source, StringComparison.Ordinal);
         Assert.Contains("intent.RequestSha256", source, StringComparison.Ordinal);
         Assert.Contains("intent.ExecutorSha256", source, StringComparison.Ordinal);
+        Assert.Contains("intent.ExecutorDllSha256", source, StringComparison.Ordinal);
         Assert.Contains("C:\\ProgramData\\YowThi\\RuntimeDeployment\\YowThi.RuntimeDeploymentExecutor.exe", source, StringComparison.Ordinal);
+        Assert.Contains("C:\\ProgramData\\YowThi\\RuntimeDeployment\\YowThi.RuntimeDeploymentExecutor.dll", source, StringComparison.Ordinal);
         Assert.Contains("SigningKeyGate.OpenValidatedSigner()", source, StringComparison.Ordinal);
         Assert.Contains("signer.SignData", source, StringComparison.Ordinal);
         Assert.Contains("HashAlgorithmName.SHA256", source, StringComparison.Ordinal);
@@ -66,7 +73,7 @@ public sealed class RuntimeDeploymentSignerContractTests
     {
         var signer = ReadSignerSource("Program.cs");
         var authorizerGate = File.ReadAllText(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "YowThi.RuntimeDeploymentAuthorizer", "ApprovalSignatureGate.cs")));
-        var fragments = new[] { "schemaVersion=", "approvalId=", "requestId=", "requestSha256=", "executorSha256=", "signerKeyId=", "issuedUtc=", "expiresUtc=", "nonce=", "action=runtime-deploy" };
+        var fragments = new[] { "schemaVersion=", "approvalId=", "requestId=", "requestSha256=", "executorSha256=", "executorDllSha256=", "signerKeyId=", "issuedUtc=", "expiresUtc=", "nonce=", "action=runtime-deploy" };
         var signerPosition = -1;
         var verifierPosition = -1;
         foreach (var fragment in fragments)
@@ -85,6 +92,7 @@ public sealed class RuntimeDeploymentSignerContractTests
     {
         var intentSchema = File.ReadAllText(RootFile("P30-RUNTIME-DEPLOYMENT-SIGNING-INTENT.schema.json"));
         Assert.Contains("\"action\": { \"const\": \"runtime-deploy\" }", intentSchema, StringComparison.Ordinal);
+        Assert.Contains("\"executorDllSha256\"", intentSchema, StringComparison.Ordinal);
         Assert.Contains("\"additionalProperties\": false", intentSchema, StringComparison.Ordinal);
         var packageSchema = File.ReadAllText(RootFile("P30-RUNTIME-DEPLOYMENT-PACKAGE.schema.json"));
         Assert.Contains("\"deploymentEnabled\": { \"const\": false }", packageSchema, StringComparison.Ordinal);
@@ -96,10 +104,12 @@ public sealed class RuntimeDeploymentSignerContractTests
     {
         var p28 = File.ReadAllText(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "YowThi.RuntimeDeploymentExecutor", "AuthorizerParentGuard.cs")));
         var p29 = File.ReadAllText(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "YowThi.RuntimeDeploymentAuthorizer", "ApprovalSignatureGate.cs")));
-        Assert.Contains(AuthorizerSha, p28, StringComparison.Ordinal);
+        Assert.Contains(AuthorizerExeSha, p28, StringComparison.Ordinal);
+        Assert.Contains(AuthorizerDllSha, p28, StringComparison.Ordinal);
         Assert.Contains(SignerSpkiSha, p29, StringComparison.Ordinal);
         Assert.Contains("MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcD", p29, StringComparison.Ordinal);
         Assert.Contains("p31-runtime-deployment-signer-user-v1", p29, StringComparison.Ordinal);
+        Assert.Contains("executorDllSha256=", p29, StringComparison.Ordinal);
     }
 
     [Fact]

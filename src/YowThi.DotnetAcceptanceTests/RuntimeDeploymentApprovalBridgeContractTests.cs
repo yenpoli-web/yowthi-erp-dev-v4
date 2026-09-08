@@ -105,11 +105,14 @@ public sealed class RuntimeDeploymentApprovalBridgeContractTests
         Assert.Contains("\"publicKeySpkiBase64\"", receipt, StringComparison.Ordinal);
 
         var package = File.ReadAllText(Root("P31-RUNTIME-DEPLOYMENT-ACTIVATED-PACKAGE.schema.json"));
-        Assert.Contains("\"schemaVersion\": { \"const\": 2 }", package, StringComparison.Ordinal);
+        Assert.Contains("\"schemaVersion\": { \"const\": 3 }", package, StringComparison.Ordinal);
         Assert.Contains("\"deploymentEnabled\": { \"const\": true }", package, StringComparison.Ordinal);
+        Assert.Contains("\"managedDllFileName\"", package, StringComparison.Ordinal);
+        Assert.Contains("\"managedDllSha256\"", package, StringComparison.Ordinal);
         Assert.Contains("\"provisioned\": { \"const\": true }", package, StringComparison.Ordinal);
         Assert.Contains("p31-runtime-deployment-signer-user-v1", package, StringComparison.Ordinal);
         Assert.Contains("YowThi.RuntimeDeploymentApprovalBridge.exe", package, StringComparison.Ordinal);
+        Assert.Contains("YowThi.RuntimeDeploymentApprovalBridge.dll", package, StringComparison.Ordinal);
     }
 
     [Fact]

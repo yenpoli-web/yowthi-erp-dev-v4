@@ -4,7 +4,8 @@ namespace YowThi.DotnetAcceptanceTests;
 
 public sealed class RuntimeDeploymentElevationContractTests
 {
-    private const string AuthorizerSha = "EC6CAE1D23127EA59D67F5EB3C380B59144C24A47B6C974350313501B4FD17CD";
+    private const string AuthorizerExeSha = "61587C8AE9A58BDA0BD68199A99FBD4D60A544E70690730127E81F57FBF3408E";
+    private const string AuthorizerDllSha = "CB9A4EA443CD98E33AFE7AD8BD81B05C5AF827DD35281253F5DBB4BB87B744A6";
 
     [Fact]
     public void AuthorizerElevationGate_RequiresFixedApprovalAndFixedProgramDataExecutableBeforeRunas()
@@ -59,9 +60,12 @@ public sealed class RuntimeDeploymentElevationContractTests
 
         Assert.Contains("ApprovalSignatureGate.Verify(approval)", authorizer, StringComparison.Ordinal);
         Assert.Contains("ValidateFixedExecutable(ExecutorExe, approval.ExecutorSha256", authorizer, StringComparison.Ordinal);
-        Assert.Contains("StartFixedExecutor(authorizationPath, approval.ExecutorSha256)", authorizer, StringComparison.Ordinal);
-        Assert.Contains(AuthorizerSha, guard, StringComparison.Ordinal);
+        Assert.Contains("ValidateFixedFileSha(ExecutorDll, approval.ExecutorDllSha256", authorizer, StringComparison.Ordinal);
+        Assert.Contains("StartFixedExecutor(authorizationPath, approval.ExecutorSha256, approval.ExecutorDllSha256)", authorizer, StringComparison.Ordinal);
+        Assert.Contains(AuthorizerExeSha, guard, StringComparison.Ordinal);
+        Assert.Contains(AuthorizerDllSha, guard, StringComparison.Ordinal);
         Assert.Contains("C:\\ProgramData\\YowThi\\RuntimeDeployment\\YowThi.RuntimeDeploymentAuthorizer.exe", guard, StringComparison.Ordinal);
+        Assert.Contains("C:\\ProgramData\\YowThi\\RuntimeDeployment\\YowThi.RuntimeDeploymentAuthorizer.dll", guard, StringComparison.Ordinal);
         Assert.Contains("NtQueryInformationProcess", guard, StringComparison.Ordinal);
         Assert.DoesNotContain("YowThiDevelopmentAgent", guard, StringComparison.Ordinal);
         Assert.DoesNotContain("Bootstrap", guard, StringComparison.Ordinal);

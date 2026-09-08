@@ -8,13 +8,15 @@ namespace YowThi.RuntimeDeploymentSigner;
 internal static class ApprovalBridgeParentGuard
 {
     internal const string ApprovalBridgeExe = @"C:\ProgramData\YowThi\RuntimeDeployment\YowThi.RuntimeDeploymentApprovalBridge.exe";
-    internal const string ExpectedApprovalBridgeExeSha256 = "EAA32076285F957FB08A5D34C5252DF95F546981F51EFF5681BBEAF60A6A6AAB";
+    internal const string ApprovalBridgeDll = @"C:\ProgramData\YowThi\RuntimeDeployment\YowThi.RuntimeDeploymentApprovalBridge.dll";
+    internal const string ExpectedApprovalBridgeExeSha256 = "D5DBDC7F12FEA22C0DBB140D0809381F70754DAC3BECA02F83519EFA74CA431B";
+    internal const string ExpectedApprovalBridgeDllSha256 = "8E9BA46CB8BC950475AA01612DE7C24C104B06D3B0B74EA6C19E3A6EC6C20E99";
 
     [ModuleInitializer]
     internal static void ValidateAtModuleLoad()
     {
-        if (ExpectedApprovalBridgeExeSha256.All(ch => ch == '0'))
-            throw new UnauthorizedAccessException("Runtime deployment approval bridge identity is not provisioned.");
+        if (ExpectedApprovalBridgeExeSha256.All(ch => ch == '0') || ExpectedApprovalBridgeDllSha256.All(ch => ch == '0'))
+            throw new UnauthorizedAccessException("Runtime deployment approval bridge EXE+DLL identity is not provisioned.");
 
         var parentProcessId = GetParentProcessId();
         using var parent = Process.GetProcessById(parentProcessId);
@@ -24,15 +26,21 @@ internal static class ApprovalBridgeParentGuard
 
         if (!string.Equals(fullParentPath, Path.GetFullPath(ApprovalBridgeExe), StringComparison.OrdinalIgnoreCase))
             throw new UnauthorizedAccessException("Runtime deployment signer may only be launched by the fixed local approval bridge executable.");
-        if (!File.Exists(fullParentPath))
-            throw new FileNotFoundException("Runtime deployment approval bridge executable does not exist.", fullParentPath);
-        if ((File.GetAttributes(fullParentPath) & FileAttributes.ReparsePoint) != 0)
-            throw new UnauthorizedAccessException("Runtime deployment approval bridge executable may not be a reparse point.");
+        ValidatePinnedFile(fullParentPath, ExpectedApprovalBridgeExeSha256, "approval bridge executable");
+        ValidatePinnedFile(ApprovalBridgeDll, ExpectedApprovalBridgeDllSha256, "approval bridge managed DLL");
+    }
 
-        using var stream = new FileStream(fullParentPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+    private static void ValidatePinnedFile(string path, string expectedSha256, string label)
+    {
+        var full = Path.GetFullPath(path);
+        if (!File.Exists(full))
+            throw new FileNotFoundException("Runtime deployment " + label + " does not exist.", full);
+        if ((File.GetAttributes(full) & FileAttributes.ReparsePoint) != 0)
+            throw new UnauthorizedAccessException("Runtime deployment " + label + " may not be a reparse point.");
+        using var stream = new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.Read);
         var actualSha256 = Convert.ToHexString(SHA256.HashData(stream));
-        if (!string.Equals(actualSha256, ExpectedApprovalBridgeExeSha256, StringComparison.OrdinalIgnoreCase))
-            throw new UnauthorizedAccessException("Runtime deployment approval bridge executable SHA-256 does not match the provisioned identity.");
+        if (!string.Equals(actualSha256, expectedSha256, StringComparison.OrdinalIgnoreCase))
+            throw new UnauthorizedAccessException("Runtime deployment " + label + " SHA-256 does not match the provisioned identity.");
     }
 
     private static int GetParentProcessId()

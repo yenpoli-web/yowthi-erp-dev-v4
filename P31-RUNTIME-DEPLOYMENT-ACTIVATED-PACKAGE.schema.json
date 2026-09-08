@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": ["schemaVersion","packageId","createdUtc","deploymentEnabled","components","signerKey","approvalBridge"],
   "properties": {
-    "schemaVersion": { "const": 2 },
+    "schemaVersion": { "const": 3 },
     "packageId": { "type": "string", "pattern": "^p31-[0-9A-Fa-f]{32}$" },
     "createdUtc": { "type": "string", "format": "date-time" },
     "deploymentEnabled": { "const": true },
@@ -14,11 +14,13 @@
       "type": "array", "minItems": 3, "maxItems": 3,
       "items": {
         "type": "object", "additionalProperties": false,
-        "required": ["name","installFileName","exeSha256"],
+        "required": ["name","installFileName","exeSha256","managedDllFileName","managedDllSha256"],
         "properties": {
           "name": { "enum": ["signer","authorizer","executor"] },
           "installFileName": { "type": "string", "minLength": 1 },
-          "exeSha256": { "type": "string", "pattern": "^[0-9A-Fa-f]{64}$" }
+          "exeSha256": { "type": "string", "pattern": "^[0-9A-Fa-f]{64}$" },
+          "managedDllFileName": { "type": "string", "minLength": 1 },
+          "managedDllSha256": { "type": "string", "pattern": "^[0-9A-Fa-f]{64}$" }
         }
       }
     },
@@ -36,10 +38,12 @@
     },
     "approvalBridge": {
       "type": "object", "additionalProperties": false,
-      "required": ["installFileName","exeSha256","provisioned"],
+      "required": ["installFileName","exeSha256","managedDllFileName","managedDllSha256","provisioned"],
       "properties": {
         "installFileName": { "const": "YowThi.RuntimeDeploymentApprovalBridge.exe" },
         "exeSha256": { "type": "string", "pattern": "^[0-9A-Fa-f]{64}$" },
+        "managedDllFileName": { "const": "YowThi.RuntimeDeploymentApprovalBridge.dll" },
+        "managedDllSha256": { "type": "string", "pattern": "^[0-9A-Fa-f]{64}$" },
         "provisioned": { "const": true }
       }
     }

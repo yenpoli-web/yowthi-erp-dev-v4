@@ -5,7 +5,8 @@ namespace YowThi.DotnetAcceptanceTests;
 public sealed class RuntimeDeploymentAuthorizerContractTests
 {
     private const string SignerSpkiSha = "3794BFF6F3FEB5B64F58A85F1CD9E4C526ACBFBDF2B51E25A27CEAF88124981A";
-    private const string AuthorizerSha = "EC6CAE1D23127EA59D67F5EB3C380B59144C24A47B6C974350313501B4FD17CD";
+    private const string AuthorizerExeSha = "61587C8AE9A58BDA0BD68199A99FBD4D60A544E70690730127E81F57FBF3408E";
+    private const string AuthorizerDllSha = "CB9A4EA443CD98E33AFE7AD8BD81B05C5AF827DD35281253F5DBB4BB87B744A6";
 
     [Fact]
     public void ApprovalSignatureGate_IsPinnedToProvisionedCurrentUserEcdsaP256()
@@ -21,6 +22,7 @@ public sealed class RuntimeDeploymentAuthorizerContractTests
         Assert.Contains("ecdsa.KeySize != 256", source, StringComparison.Ordinal);
         Assert.Contains("VerifyData", source, StringComparison.Ordinal);
         Assert.Contains("HashAlgorithmName.SHA256", source, StringComparison.Ordinal);
+        Assert.Contains("executorDllSha256=", source, StringComparison.Ordinal);
         Assert.Contains("action=runtime-deploy", source, StringComparison.Ordinal);
         Assert.Contains("p31-runtime-deployment-signer-user-v1", source, StringComparison.Ordinal);
     }
@@ -35,25 +37,30 @@ public sealed class RuntimeDeploymentAuthorizerContractTests
         Assert.Contains("!request.RequiresDedicatedSupervisorExecutor", source, StringComparison.Ordinal);
         Assert.Contains("approval.RequestSha256", source, StringComparison.Ordinal);
         Assert.Contains("approval.ExecutorSha256", source, StringComparison.Ordinal);
+        Assert.Contains("approval.ExecutorDllSha256", source, StringComparison.Ordinal);
         Assert.Contains("processAuthorization", source, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("C:\\ProgramData\\YowThi\\RuntimeDeployment\\YowThi.RuntimeDeploymentExecutor.exe", source, StringComparison.Ordinal);
+        Assert.Contains("C:\\ProgramData\\YowThi\\RuntimeDeployment\\YowThi.RuntimeDeploymentExecutor.dll", source, StringComparison.Ordinal);
         Assert.Contains("FileName = ExecutorExe", source, StringComparison.Ordinal);
         Assert.Contains("start.ArgumentList.Add(authorizationPath)", source, StringComparison.Ordinal);
         Assert.Contains("ValidateActiveState(active, request)", source, StringComparison.Ordinal);
         Assert.Contains("ValidateRuntimeFile(request.TargetRuntimeDll", source, StringComparison.Ordinal);
         Assert.Contains("ValidateFixedExecutable(SupervisorExe", source, StringComparison.Ordinal);
         Assert.Contains("ValidateFixedExecutable(ExecutorExe", source, StringComparison.Ordinal);
+        Assert.Contains("ValidateFixedFileSha(ExecutorDll", source, StringComparison.Ordinal);
+        Assert.Contains("StartFixedExecutor(authorizationPath, approval.ExecutorSha256, approval.ExecutorDllSha256)", source, StringComparison.Ordinal);
         Assert.DoesNotContain("ControlService", source, StringComparison.Ordinal);
         Assert.DoesNotContain("StartService", source, StringComparison.Ordinal);
         Assert.DoesNotContain(".Kill(", source, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void ApprovalSchema_BindsRequestExecutorUserScopedSignerNonceAndSignature()
+    public void ApprovalSchema_BindsRequestExecutorExeDllUserScopedSignerNonceAndSignature()
     {
         var schema = File.ReadAllText(RootFile("P29-RUNTIME-DEPLOYMENT-APPROVAL.schema.json"));
         Assert.Contains("\"requestSha256\"", schema, StringComparison.Ordinal);
         Assert.Contains("\"executorSha256\"", schema, StringComparison.Ordinal);
+        Assert.Contains("\"executorDllSha256\"", schema, StringComparison.Ordinal);
         Assert.Contains("\"signerKeyId\": { \"const\": \"p31-runtime-deployment-signer-user-v1\" }", schema, StringComparison.Ordinal);
         Assert.Contains("\"nonce\"", schema, StringComparison.Ordinal);
         Assert.Contains("\"signatureBase64\"", schema, StringComparison.Ordinal);
@@ -65,8 +72,11 @@ public sealed class RuntimeDeploymentAuthorizerContractTests
     {
         var guard = File.ReadAllText(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "YowThi.RuntimeDeploymentExecutor", "AuthorizerParentGuard.cs")));
         Assert.Contains("YowThi.RuntimeDeploymentAuthorizer.exe", guard, StringComparison.Ordinal);
-        Assert.Contains(AuthorizerSha, guard, StringComparison.Ordinal);
+        Assert.Contains("YowThi.RuntimeDeploymentAuthorizer.dll", guard, StringComparison.Ordinal);
+        Assert.Contains(AuthorizerExeSha, guard, StringComparison.Ordinal);
+        Assert.Contains(AuthorizerDllSha, guard, StringComparison.Ordinal);
         Assert.DoesNotContain("ExpectedAuthorizerExeSha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"", guard, StringComparison.Ordinal);
+        Assert.DoesNotContain("ExpectedAuthorizerDllSha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"", guard, StringComparison.Ordinal);
     }
 
     [Fact]

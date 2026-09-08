@@ -65,13 +65,15 @@ internal static class Program
             if (expiry <= now)
                 throw new UnauthorizedAccessException("Deployment request expired before interactive approval.");
 
+            var executor = package.Component("executor");
             var intent = new SigningIntent(
                 1,
                 Guid.NewGuid().ToString("N"),
                 Guid.NewGuid().ToString("N"),
                 request.RequestId,
                 requestSha256,
-                package.Component("executor").ExeSha256,
+                executor.ExeSha256,
+                executor.ManagedDllSha256,
                 now,
                 expiry,
                 Guid.NewGuid().ToString("N"),
@@ -84,7 +86,7 @@ internal static class Program
             var intentPath = Path.Combine(SigningIntentRoot, intent.SigningIntentId + ".json");
             WriteCreateNewJson(intentPath, intent);
 
-            var signerExit = RunFixedChild(SignerExe, package.Component("signer").ExeSha256, intentPath, TimeSpan.FromMinutes(1));
+            var signerExit = RunFixedChild(SignerExe, package.Component("signer"), intentPath, TimeSpan.FromMinutes(1));
             if (signerExit != 0)
                 throw new InvalidOperationException("Runtime deployment signer did not produce an approval.");
 
@@ -92,7 +94,7 @@ internal static class Program
             if (!File.Exists(approvalPath))
                 throw new InvalidOperationException("Signed runtime deployment approval was not created.");
 
-            var authorizerExit = RunFixedChild(AuthorizerExe, package.Component("authorizer").ExeSha256, approvalPath, TimeSpan.FromMinutes(5));
+            var authorizerExit = RunFixedChild(AuthorizerExe, package.Component("authorizer"), approvalPath, TimeSpan.FromMinutes(5));
             if (authorizerExit != 0)
                 throw new InvalidOperationException("Runtime deployment authorizer/executor chain did not complete successfully.");
 
@@ -117,7 +119,7 @@ internal static class Program
             "Current runtime SHA: " + currentSha + "\n" +
             "Target runtime SHA:  " + targetSha + "\n\n" +
             mode +
-            "This approval will be short-lived and bound to the exact request and installed executor.";
+            "This approval will be short-lived and bound to the exact request and installed executor EXE+DLL identity.";
 
         return MessageBox.Show(
             prompt,
@@ -135,8 +137,8 @@ internal static class Program
         var package = JsonSerializer.Deserialize<PackageManifest>(File.ReadAllBytes(PackageManifestPath), JsonOptions)
             ?? throw new InvalidDataException("Runtime deployment package manifest is invalid.");
 
-        if (package.SchemaVersion != 2 || !package.DeploymentEnabled || !package.SignerKey.Provisioned || !package.ApprovalBridge.Provisioned)
-            throw new UnauthorizedAccessException("Runtime deployment package is not fully provisioned and enabled.");
+        if (package.SchemaVersion != 3 || !package.DeploymentEnabled || !package.SignerKey.Provisioned || !package.ApprovalBridge.Provisioned)
+            throw new UnauthorizedAccessException("Runtime deployment package is not fully provisioned and enabled for managed-payload identity binding.");
         if (package.Components.Count != 3 || package.Components.Select(x => x.Name).Distinct(StringComparer.Ordinal).Count() != 3)
             throw new InvalidDataException("Runtime deployment package must contain exactly signer, authorizer and executor components.");
 
@@ -147,14 +149,19 @@ internal static class Program
             !string.Equals(package.SignerKey.KeyId, "p31-runtime-deployment-signer-user-v1", StringComparison.Ordinal))
             throw new UnauthorizedAccessException("Runtime deployment package is not bound to the current interactive user signing identity.");
 
-        ValidateInstalledExecutable(SignerExe, package.Component("signer").ExeSha256);
-        ValidateInstalledExecutable(AuthorizerExe, package.Component("authorizer").ExeSha256);
-        ValidateInstalledExecutable(ExecutorExe, package.Component("executor").ExeSha256);
+        ValidateInstalledComponent(SignerExe, package.Component("signer"), "signer");
+        ValidateInstalledComponent(AuthorizerExe, package.Component("authorizer"), "authorizer");
+        ValidateInstalledComponent(ExecutorExe, package.Component("executor"), "executor");
 
         var self = Environment.ProcessPath ?? throw new UnauthorizedAccessException("Approval bridge executable path is unavailable.");
-        if (!string.Equals(Path.GetFullPath(self), Path.Combine(InstallRoot, "YowThi.RuntimeDeploymentApprovalBridge.exe"), StringComparison.OrdinalIgnoreCase))
+        var expectedSelf = Path.Combine(InstallRoot, "YowThi.RuntimeDeploymentApprovalBridge.exe");
+        if (!string.Equals(Path.GetFullPath(self), expectedSelf, StringComparison.OrdinalIgnoreCase))
             throw new UnauthorizedAccessException("Approval bridge is not running from the fixed ProgramData installation path.");
-        ValidateInstalledExecutable(self, package.ApprovalBridge.ExeSha256);
+        if (!string.Equals(package.ApprovalBridge.InstallFileName, Path.GetFileName(expectedSelf), StringComparison.Ordinal) ||
+            !string.Equals(package.ApprovalBridge.ManagedDllFileName, "YowThi.RuntimeDeploymentApprovalBridge.dll", StringComparison.Ordinal))
+            throw new InvalidDataException("Approval bridge package file names are invalid.");
+        ValidateInstalledFile(expectedSelf, package.ApprovalBridge.ExeSha256, "approval bridge executable");
+        ValidateInstalledFile(Path.Combine(InstallRoot, package.ApprovalBridge.ManagedDllFileName), package.ApprovalBridge.ManagedDllSha256, "approval bridge managed DLL");
         return package;
     }
 
@@ -420,9 +427,9 @@ internal static class Program
             throw new InvalidDataException("listenUrl and healthUrl do not identify the same loopback endpoint.");
     }
 
-    private static int RunFixedChild(string executable, string expectedSha, string argument, TimeSpan timeout)
+    private static int RunFixedChild(string executable, Component component, string argument, TimeSpan timeout)
     {
-        ValidateInstalledExecutable(executable, expectedSha);
+        ValidateInstalledComponent(executable, component, component.Name);
         var start = new ProcessStartInfo
         {
             FileName = executable,
@@ -437,14 +444,27 @@ internal static class Program
         return child.ExitCode;
     }
 
-    private static void ValidateInstalledExecutable(string path, string expectedSha)
+    private static void ValidateInstalledComponent(string executable, Component component, string expectedName)
     {
-        RequireSha256(expectedSha, "installedExecutableSha256");
+        if (!string.Equals(component.Name, expectedName, StringComparison.Ordinal))
+            throw new InvalidDataException("Runtime deployment component name mismatch.");
+        var expectedExeName = Path.GetFileName(executable);
+        var expectedDllName = Path.GetFileNameWithoutExtension(executable) + ".dll";
+        if (!string.Equals(component.InstallFileName, expectedExeName, StringComparison.Ordinal) ||
+            !string.Equals(component.ManagedDllFileName, expectedDllName, StringComparison.Ordinal))
+            throw new InvalidDataException("Runtime deployment component file names do not match the fixed installation identity.");
+        ValidateInstalledFile(executable, component.ExeSha256, expectedName + " executable");
+        ValidateInstalledFile(Path.Combine(InstallRoot, component.ManagedDllFileName), component.ManagedDllSha256, expectedName + " managed DLL");
+    }
+
+    private static void ValidateInstalledFile(string path, string expectedSha, string label)
+    {
+        RequireSha256(expectedSha, label + "Sha256");
         var full = Path.GetFullPath(path);
-        if (!File.Exists(full)) throw new FileNotFoundException("Required runtime deployment executable is missing.", full);
+        if (!File.Exists(full)) throw new FileNotFoundException("Required runtime deployment file is missing.", full);
         RejectReparse(full);
         if (!string.Equals(HashFile(full), expectedSha, StringComparison.OrdinalIgnoreCase))
-            throw new UnauthorizedAccessException("Runtime deployment executable SHA-256 does not match the activated package manifest.");
+            throw new UnauthorizedAccessException(label + " SHA-256 does not match the activated package manifest.");
     }
 
     private static void ValidateFixedFile(string path, string label)
@@ -489,7 +509,7 @@ internal static class Program
         stream.Flush(flushToDisk: true);
     }
 
-    internal sealed record SigningIntent(int SchemaVersion, string SigningIntentId, string ApprovalId, string RequestId, string RequestSha256, string ExecutorSha256, DateTimeOffset IssuedUtc, DateTimeOffset ExpiresUtc, string Nonce, string Action);
+    internal sealed record SigningIntent(int SchemaVersion, string SigningIntentId, string ApprovalId, string RequestId, string RequestSha256, string ExecutorSha256, string ExecutorDllSha256, DateTimeOffset IssuedUtc, DateTimeOffset ExpiresUtc, string Nonce, string Action);
 
     internal sealed record DeploymentRequest(int SchemaVersion, string RequestPlanId, string RequestId, string ReleaseName, string CurrentRuntimeDll, string CurrentRuntimeSha256, int CurrentProcessId, string TargetRuntimeDll, string TargetRuntimeSha256, string ListenUrl, string HealthUrl, string SupervisorExe, string SupervisorSha256, bool ProcessAuthorization, bool RequiresDedicatedSupervisorExecutor, DateTimeOffset CreatedUtc, DateTimeOffset ExpiresUtc);
 
@@ -498,9 +518,9 @@ internal static class Program
     internal sealed record ActiveRuntimeSlot(string? PlanId, string RuntimeDll, string RuntimeSha256, string ListenUrl, string HealthUrl, int ProcessId);
     internal sealed record ActiveState(int SchemaVersion, ActiveRuntimeSlot Current, ActiveRuntimeSlot? Previous, DateTimeOffset UpdatedUtc);
 
-    internal sealed record Component(string Name, string InstallFileName, string ExeSha256);
+    internal sealed record Component(string Name, string InstallFileName, string ExeSha256, string ManagedDllFileName, string ManagedDllSha256);
     internal sealed record SignerKeyBinding(string KeyName, string KeyId, string UserSid, string KeyScope, string SpkiSha256, bool Provisioned);
-    internal sealed record ApprovalBridgeBinding(string InstallFileName, string ExeSha256, bool Provisioned);
+    internal sealed record ApprovalBridgeBinding(string InstallFileName, string ExeSha256, string ManagedDllFileName, string ManagedDllSha256, bool Provisioned);
     internal sealed record PackageManifest(int SchemaVersion, string PackageId, DateTimeOffset CreatedUtc, bool DeploymentEnabled, List<Component> Components, SignerKeyBinding SignerKey, ApprovalBridgeBinding ApprovalBridge)
     {
         internal Component Component(string name) => Components.Single(x => string.Equals(x.Name, name, StringComparison.Ordinal));

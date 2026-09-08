@@ -4,7 +4,7 @@
   "title": "YowThi P30 Runtime Deployment Signing Intent",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion","signingIntentId","approvalId","requestId","requestSha256","executorSha256","issuedUtc","expiresUtc","nonce","action"],
+  "required": ["schemaVersion","signingIntentId","approvalId","requestId","requestSha256","executorSha256","executorDllSha256","issuedUtc","expiresUtc","nonce","action"],
   "properties": {
     "schemaVersion": { "const": 1 },
     "signingIntentId": { "type": "string", "pattern": "^[0-9A-Fa-f]{32}$" },
@@ -12,6 +12,7 @@
     "requestId": { "type": "string", "pattern": "^[0-9A-Fa-f]{32}$" },
     "requestSha256": { "type": "string", "pattern": "^[0-9A-Fa-f]{64}$" },
     "executorSha256": { "type": "string", "pattern": "^[0-9A-Fa-f]{64}$" },
+    "executorDllSha256": { "type": "string", "pattern": "^[0-9A-Fa-f]{64}$" },
     "issuedUtc": { "type": "string", "format": "date-time" },
     "expiresUtc": { "type": "string", "format": "date-time" },
     "nonce": { "type": "string", "pattern": "^[0-9A-Fa-f]{32}$" },

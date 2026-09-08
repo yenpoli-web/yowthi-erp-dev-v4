@@ -21,6 +21,7 @@ internal static class Program
     private const string ActiveStatePath = DevRoot + @"\.agent3-handoff\active-runtime.json";
     private const string SupervisorExe = DevRoot + @"\runtime-supervisor\current\YowThi.RuntimeSupervisor.exe";
     private const string ExecutorExe = @"C:\ProgramData\YowThi\RuntimeDeployment\YowThi.RuntimeDeploymentExecutor.exe";
+    private const string ExecutorDll = @"C:\ProgramData\YowThi\RuntimeDeployment\YowThi.RuntimeDeploymentExecutor.dll";
     private const string RuntimeFileName = "YowThi.DevelopmentAgent3.dll";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -78,6 +79,7 @@ internal static class Program
         ValidateRuntimeFile(request.TargetRuntimeDll, request.TargetRuntimeSha256, request.ReleaseName);
         ValidateFixedExecutable(SupervisorExe, request.SupervisorSha256, "Runtime Supervisor");
         ValidateFixedExecutable(ExecutorExe, approval.ExecutorSha256, "runtime deployment executor");
+        ValidateFixedFileSha(ExecutorDll, approval.ExecutorDllSha256, "runtime deployment executor managed DLL");
 
         var now = DateTimeOffset.UtcNow;
         var expires = Min(approval.ExpiresUtc, request.ExpiresUtc, now.AddMinutes(2));
@@ -99,6 +101,7 @@ internal static class Program
             Path.GetFullPath(request.SupervisorExe),
             request.SupervisorSha256,
             approval.ExecutorSha256,
+            approval.ExecutorDllSha256,
             true,
             now,
             expires);
@@ -111,7 +114,7 @@ internal static class Program
         var executorStarted = false;
         try
         {
-            using var child = StartFixedExecutor(authorizationPath, approval.ExecutorSha256);
+            using var child = StartFixedExecutor(authorizationPath, approval.ExecutorSha256, approval.ExecutorDllSha256);
             executorStarted = true;
             if (!child.WaitForExit((int)TimeSpan.FromMinutes(5).TotalMilliseconds))
                 throw new TimeoutException("Runtime deployment executor did not reach a terminal state within five minutes.");
@@ -136,6 +139,7 @@ internal static class Program
                 executorExitCode = child.ExitCode,
                 requestSha256 = approval.RequestSha256,
                 executorSha256 = approval.ExecutorSha256,
+                executorDllSha256 = approval.ExecutorDllSha256,
                 completedUtc = DateTimeOffset.UtcNow
             });
             MoveApproval(fullApprovalPath, AuthorizerCompletedRoot, approval.ApprovalId);
@@ -154,9 +158,10 @@ internal static class Program
         }
     }
 
-    private static Process StartFixedExecutor(string authorizationPath, string expectedSha)
+    private static Process StartFixedExecutor(string authorizationPath, string expectedExeSha, string expectedDllSha)
     {
-        ValidateFixedExecutable(ExecutorExe, expectedSha, "runtime deployment executor");
+        ValidateFixedExecutable(ExecutorExe, expectedExeSha, "runtime deployment executor");
+        ValidateFixedFileSha(ExecutorDll, expectedDllSha, "runtime deployment executor managed DLL");
         var start = new ProcessStartInfo
         {
             FileName = ExecutorExe,
@@ -177,6 +182,7 @@ internal static class Program
         ValidateGuidN(approval.Nonce, "nonce");
         RequireSha256(approval.RequestSha256, "requestSha256");
         RequireSha256(approval.ExecutorSha256, "executorSha256");
+        RequireSha256(approval.ExecutorDllSha256, "executorDllSha256");
         if (!string.Equals(approval.SignerKeyId, ApprovalSignatureGate.SignerKeyId, StringComparison.Ordinal))
             throw new UnauthorizedAccessException("Runtime deployment approval signer key ID is not allowed.");
         if (approval.IssuedUtc > DateTimeOffset.UtcNow.AddMinutes(1))
@@ -249,11 +255,16 @@ internal static class Program
 
     private static void ValidateFixedExecutable(string path, string expectedSha, string label)
     {
+        ValidateFixedFileSha(path, expectedSha, label + " executable");
+    }
+
+    private static void ValidateFixedFileSha(string path, string expectedSha, string label)
+    {
         RequireSha256(expectedSha, label + "Sha256");
         var full = Path.GetFullPath(path);
-        if (!File.Exists(full)) throw new FileNotFoundException(label + " executable does not exist.", full);
+        if (!File.Exists(full)) throw new FileNotFoundException(label + " does not exist.", full);
         RejectReparse(full);
-        if (!EqualsSha(HashFile(full), expectedSha)) throw new InvalidOperationException(label + " executable SHA-256 mismatch.");
+        if (!EqualsSha(HashFile(full), expectedSha)) throw new InvalidOperationException(label + " SHA-256 mismatch.");
     }
 
     private static void ValidateFixedRoots()
@@ -431,6 +442,7 @@ internal static class Program
         string SupervisorExe,
         string SupervisorSha256,
         string ExecutorSha256,
+        string ExecutorDllSha256,
         bool ProcessAuthorization,
         DateTimeOffset AuthorizedUtc,
         DateTimeOffset ExpiresUtc);

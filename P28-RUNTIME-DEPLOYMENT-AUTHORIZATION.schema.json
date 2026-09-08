@@ -20,6 +20,7 @@
     "supervisorExe",
     "supervisorSha256",
     "executorSha256",
+    "executorDllSha256",
     "processAuthorization",
     "authorizedUtc",
     "expiresUtc"
@@ -40,6 +41,7 @@
     "supervisorExe": { "type": "string", "minLength": 1 },
     "supervisorSha256": { "type": "string", "pattern": "^[0-9A-Fa-f]{64}$" },
     "executorSha256": { "type": "string", "pattern": "^[0-9A-Fa-f]{64}$" },
+    "executorDllSha256": { "type": "string", "pattern": "^[0-9A-Fa-f]{64}$" },
     "processAuthorization": { "const": true },
     "authorizedUtc": { "type": "string", "format": "date-time" },
     "expiresUtc": { "type": "string", "format": "date-time" }

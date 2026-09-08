@@ -4,7 +4,8 @@ namespace YowThi.DotnetAcceptanceTests;
 
 public sealed class RuntimeDeploymentExecutorContractTests
 {
-    private const string AuthorizerSha = "EC6CAE1D23127EA59D67F5EB3C380B59144C24A47B6C974350313501B4FD17CD";
+    private const string AuthorizerExeSha = "61587C8AE9A58BDA0BD68199A99FBD4D60A544E70690730127E81F57FBF3408E";
+    private const string AuthorizerDllSha = "CB9A4EA443CD98E33AFE7AD8BD81B05C5AF827DD35281253F5DBB4BB87B744A6";
 
     [Fact]
     public void ExecutorSource_RequiresSeparatedAuthorizationAndExactIdentityBindings()
@@ -26,19 +27,43 @@ public sealed class RuntimeDeploymentExecutorContractTests
     [Fact]
     public void AuthorizerParentGuard_BlocksDirectOrWrongAuthorizerExecution()
     {
-        var guard = ReadAuthorizerGuardSource();
+        var guard = ReadExecutorFile("AuthorizerParentGuard.cs");
 
         Assert.Contains("[ModuleInitializer]", guard, StringComparison.Ordinal);
         Assert.Contains("C:\\ProgramData\\YowThi\\RuntimeDeployment\\YowThi.RuntimeDeploymentAuthorizer.exe", guard, StringComparison.Ordinal);
+        Assert.Contains("C:\\ProgramData\\YowThi\\RuntimeDeployment\\YowThi.RuntimeDeploymentAuthorizer.dll", guard, StringComparison.Ordinal);
         Assert.Contains("ExpectedAuthorizerExeSha256", guard, StringComparison.Ordinal);
-        Assert.Contains(AuthorizerSha, guard, StringComparison.Ordinal);
+        Assert.Contains("ExpectedAuthorizerDllSha256", guard, StringComparison.Ordinal);
+        Assert.Contains(AuthorizerExeSha, guard, StringComparison.Ordinal);
+        Assert.Contains(AuthorizerDllSha, guard, StringComparison.Ordinal);
         Assert.DoesNotContain("ExpectedAuthorizerExeSha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"", guard, StringComparison.Ordinal);
+        Assert.DoesNotContain("ExpectedAuthorizerDllSha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"", guard, StringComparison.Ordinal);
         Assert.Contains("GetParentProcessId", guard, StringComparison.Ordinal);
         Assert.Contains("NtQueryInformationProcess", guard, StringComparison.Ordinal);
         Assert.Contains("parent.MainModule?.FileName", guard, StringComparison.Ordinal);
         Assert.Contains("SHA-256 does not match the provisioned identity", guard, StringComparison.Ordinal);
         Assert.DoesNotContain("Process.Start", guard, StringComparison.Ordinal);
         Assert.DoesNotContain(".Kill(", guard, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ManagedPayloadAuthorizationGate_BindsOwnExeAndDllBeforeMain()
+    {
+        var gate = ReadExecutorFile("ManagedPayloadAuthorizationGate.cs");
+        Assert.Contains("[ModuleInitializer]", gate, StringComparison.Ordinal);
+        Assert.Contains("Environment.GetCommandLineArgs()", gate, StringComparison.Ordinal);
+        Assert.Contains("args.Length != 2", gate, StringComparison.Ordinal);
+        Assert.Contains("\\.runtime-supervisor-deployment\\authorized", gate, StringComparison.Ordinal);
+        Assert.Contains("authorization.ProcessAuthorization", gate, StringComparison.Ordinal);
+        Assert.Contains("authorization.ExecutorSha256", gate, StringComparison.Ordinal);
+        Assert.Contains("authorization.ExecutorDllSha256", gate, StringComparison.Ordinal);
+        Assert.Contains("YowThi.RuntimeDeploymentExecutor.exe", gate, StringComparison.Ordinal);
+        Assert.Contains("YowThi.RuntimeDeploymentExecutor.dll", gate, StringComparison.Ordinal);
+        Assert.Contains("Environment.ProcessPath", gate, StringComparison.Ordinal);
+        Assert.Contains("authorization.ExpiresUtc <= DateTimeOffset.UtcNow", gate, StringComparison.Ordinal);
+        Assert.Contains("FileAttributes.ReparsePoint", gate, StringComparison.Ordinal);
+        Assert.DoesNotContain("Process.Start", gate, StringComparison.Ordinal);
+        Assert.DoesNotContain("ControlService", gate, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -76,7 +101,7 @@ public sealed class RuntimeDeploymentExecutorContractTests
     }
 
     [Fact]
-    public void AuthorizationSchema_RequiresExplicitProcessAuthorization()
+    public void AuthorizationSchema_RequiresExplicitProcessAuthorizationAndManagedPayloadSha()
     {
         var schemaPath = Path.GetFullPath(Path.Combine(
             AppContext.BaseDirectory,
@@ -87,26 +112,19 @@ public sealed class RuntimeDeploymentExecutorContractTests
         var schema = File.ReadAllText(schemaPath);
         Assert.Contains("\"processAuthorization\": { \"const\": true }", schema, StringComparison.Ordinal);
         Assert.Contains("\"executorSha256\"", schema, StringComparison.Ordinal);
+        Assert.Contains("\"executorDllSha256\"", schema, StringComparison.Ordinal);
         Assert.Contains("\"requestSha256\"", schema, StringComparison.Ordinal);
     }
 
-    private static string ReadExecutorSource()
-    {
-        var sourcePath = Path.GetFullPath(Path.Combine(
-            AppContext.BaseDirectory,
-            "..", "..", "..", "..",
-            "YowThi.RuntimeDeploymentExecutor", "Program.cs"));
-        Assert.True(File.Exists(sourcePath), $"Dedicated runtime deployment executor source was not found: {sourcePath}");
-        return File.ReadAllText(sourcePath);
-    }
+    private static string ReadExecutorSource() => ReadExecutorFile("Program.cs");
 
-    private static string ReadAuthorizerGuardSource()
+    private static string ReadExecutorFile(string fileName)
     {
         var sourcePath = Path.GetFullPath(Path.Combine(
             AppContext.BaseDirectory,
             "..", "..", "..", "..",
-            "YowThi.RuntimeDeploymentExecutor", "AuthorizerParentGuard.cs"));
-        Assert.True(File.Exists(sourcePath), $"Runtime deployment authorizer parent guard source was not found: {sourcePath}");
+            "YowThi.RuntimeDeploymentExecutor", fileName));
+        Assert.True(File.Exists(sourcePath), $"Runtime deployment executor source was not found: {sourcePath}");
         return File.ReadAllText(sourcePath);
     }
 }

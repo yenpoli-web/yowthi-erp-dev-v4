@@ -14,6 +14,7 @@ internal static class Program
     private const string CompletedRoot = DeploymentRoot + @"\signer-completed";
     private const string FailedRoot = DeploymentRoot + @"\signer-failed";
     private const string ExecutorExe = @"C:\ProgramData\YowThi\RuntimeDeployment\YowThi.RuntimeDeploymentExecutor.exe";
+    private const string ExecutorDll = @"C:\ProgramData\YowThi\RuntimeDeployment\YowThi.RuntimeDeploymentExecutor.dll";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -61,7 +62,7 @@ internal static class Program
         var request = JsonSerializer.Deserialize<DeploymentRequest>(requestBytes, JsonOptions)
             ?? throw new InvalidDataException("Invalid P27 deployment request JSON.");
         ValidateRequest(request, intent);
-        ValidateExecutor(intent.ExecutorSha256);
+        ValidateExecutor(intent.ExecutorSha256, intent.ExecutorDllSha256);
 
         var unsigned = new ApprovalEnvelope(
             1,
@@ -69,6 +70,7 @@ internal static class Program
             intent.RequestId,
             intent.RequestSha256,
             intent.ExecutorSha256,
+            intent.ExecutorDllSha256,
             SigningKeyGate.SignerKeyId,
             intent.IssuedUtc,
             intent.ExpiresUtc,
@@ -94,6 +96,7 @@ internal static class Program
                 requestId = approval.RequestId,
                 requestSha256 = approval.RequestSha256,
                 executorSha256 = approval.ExecutorSha256,
+                executorDllSha256 = approval.ExecutorDllSha256,
                 signerKeyId = approval.SignerKeyId,
                 signerSpkiSha256 = SigningKeyGate.ExpectedSignerSpkiSha256,
                 status = "completed",
@@ -122,6 +125,7 @@ internal static class Program
         ValidateGuidN(intent.Nonce, "nonce");
         RequireSha256(intent.RequestSha256, "requestSha256");
         RequireSha256(intent.ExecutorSha256, "executorSha256");
+        RequireSha256(intent.ExecutorDllSha256, "executorDllSha256");
 
         if (intent.IssuedUtc > DateTimeOffset.UtcNow.AddMinutes(1))
             throw new InvalidDataException("Signing intent issuedUtc is in the future.");
@@ -143,15 +147,21 @@ internal static class Program
             throw new UnauthorizedAccessException("Signing intent is expired or outlives its bound P27 request.");
     }
 
-    private static void ValidateExecutor(string expectedSha)
+    private static void ValidateExecutor(string expectedExeSha, string expectedDllSha)
     {
-        RequireSha256(expectedSha, "executorSha256");
-        var full = Path.GetFullPath(ExecutorExe);
+        ValidatePinnedFile(ExecutorExe, expectedExeSha, "executor executable");
+        ValidatePinnedFile(ExecutorDll, expectedDllSha, "executor managed DLL");
+    }
+
+    private static void ValidatePinnedFile(string path, string expectedSha, string label)
+    {
+        RequireSha256(expectedSha, label + "Sha256");
+        var full = Path.GetFullPath(path);
         if (!File.Exists(full))
-            throw new FileNotFoundException("Fixed runtime deployment executor is not installed.", full);
+            throw new FileNotFoundException("Fixed runtime deployment " + label + " is not installed.", full);
         RejectReparse(full);
         if (!EqualsSha(HashFile(full), expectedSha))
-            throw new InvalidOperationException("Fixed runtime deployment executor SHA-256 mismatch.");
+            throw new InvalidOperationException("Fixed runtime deployment " + label + " SHA-256 mismatch.");
     }
 
     internal static byte[] BuildCanonicalPayload(ApprovalEnvelope approval)
@@ -162,6 +172,7 @@ internal static class Program
             "requestId=" + approval.RequestId,
             "requestSha256=" + approval.RequestSha256.ToUpperInvariant(),
             "executorSha256=" + approval.ExecutorSha256.ToUpperInvariant(),
+            "executorDllSha256=" + approval.ExecutorDllSha256.ToUpperInvariant(),
             "signerKeyId=" + approval.SignerKeyId,
             "issuedUtc=" + approval.IssuedUtc.ToUniversalTime().ToString("O"),
             "expiresUtc=" + approval.ExpiresUtc.ToUniversalTime().ToString("O"),
@@ -287,6 +298,7 @@ internal static class Program
         string RequestId,
         string RequestSha256,
         string ExecutorSha256,
+        string ExecutorDllSha256,
         DateTimeOffset IssuedUtc,
         DateTimeOffset ExpiresUtc,
         string Nonce,
@@ -298,6 +310,7 @@ internal static class Program
         string RequestId,
         string RequestSha256,
         string ExecutorSha256,
+        string ExecutorDllSha256,
         string SignerKeyId,
         DateTimeOffset IssuedUtc,
         DateTimeOffset ExpiresUtc,
