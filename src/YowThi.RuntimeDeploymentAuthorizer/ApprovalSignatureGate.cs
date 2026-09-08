@@ -6,11 +6,11 @@ namespace YowThi.RuntimeDeploymentAuthorizer;
 
 internal static class ApprovalSignatureGate
 {
-    // P29 intentionally ships fail-closed. P30 must provision an independently
-    // reviewed ECDSA P-256 signer public key and pin its SPKI SHA-256 here.
+    // P31 hardening keeps this verifier fail-closed until the interactive CurrentUser
+    // signer key has been provisioned and its exact public SPKI identity is pinned here.
     internal const string SignerPublicKeySpkiBase64 = "";
     internal const string ExpectedSignerSpkiSha256 = "0000000000000000000000000000000000000000000000000000000000000000";
-    internal const string SignerKeyId = "p30-runtime-deployment-signer-v1";
+    internal const string SignerKeyId = "p31-runtime-deployment-signer-user-v1";
 
     [ModuleInitializer]
     internal static void ValidateProvisioningAtModuleLoad()

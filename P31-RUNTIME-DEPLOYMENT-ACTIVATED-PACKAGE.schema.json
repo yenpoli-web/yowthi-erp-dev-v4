@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yowthi.local/schemas/p31-runtime-deployment-activated-package.schema.json",
+  "title": "YowThi P31 Runtime Deployment Activated Package",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion","packageId","createdUtc","deploymentEnabled","components","signerKey","approvalBridge"],
+  "properties": {
+    "schemaVersion": { "const": 2 },
+    "packageId": { "type": "string", "pattern": "^p31-[0-9A-Fa-f]{32}$" },
+    "createdUtc": { "type": "string", "format": "date-time" },
+    "deploymentEnabled": { "const": true },
+    "components": {
+      "type": "array", "minItems": 3, "maxItems": 3,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["name","installFileName","exeSha256"],
+        "properties": {
+          "name": { "enum": ["signer","authorizer","executor"] },
+          "installFileName": { "type": "string", "minLength": 1 },
+          "exeSha256": { "type": "string", "pattern": "^[0-9A-Fa-f]{64}$" }
+        }
+      }
+    },
+    "signerKey": {
+      "type": "object", "additionalProperties": false,
+      "required": ["keyName","keyId","userSid","keyScope","spkiSha256","provisioned"],
+      "properties": {
+        "keyName": { "const": "YowThiRuntimeDeploymentSignerV1" },
+        "keyId": { "const": "p31-runtime-deployment-signer-user-v1" },
+        "userSid": { "type": "string", "minLength": 4, "maxLength": 184 },
+        "keyScope": { "const": "CurrentUser" },
+        "spkiSha256": { "type": "string", "pattern": "^[0-9A-Fa-f]{64}$" },
+        "provisioned": { "const": true }
+      }
+    },
+    "approvalBridge": {
+      "type": "object", "additionalProperties": false,
+      "required": ["installFileName","exeSha256","provisioned"],
+      "properties": {
+        "installFileName": { "const": "YowThi.RuntimeDeploymentApprovalBridge.exe" },
+        "exeSha256": { "type": "string", "pattern": "^[0-9A-Fa-f]{64}$" },
+        "provisioned": { "const": true }
+      }
+    }
+  }
+}

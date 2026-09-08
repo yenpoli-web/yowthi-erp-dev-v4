@@ -81,6 +81,24 @@ jobs:
       - name: Build Runtime Deployment Signer
         run: '"C:\Program Files\dotnet\dotnet.exe" build src\YowThi.RuntimeDeploymentSigner\YowThi.RuntimeDeploymentSigner.csproj --configuration Release --nologo'
 
+  deployment-approval-bridge-build:
+    runs-on: [self-hosted, yowthi-erp-dev-v4]
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Build Runtime Deployment Approval Bridge
+        run: '"C:\Program Files\dotnet\dotnet.exe" build src\YowThi.RuntimeDeploymentApprovalBridge\YowThi.RuntimeDeploymentApprovalBridge.csproj --configuration Release --nologo'
+
+  deployment-key-provisioner-build:
+    runs-on: [self-hosted, yowthi-erp-dev-v4]
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Build Runtime Deployment Key Provisioner
+        run: '"C:\Program Files\dotnet\dotnet.exe" build src\YowThi.RuntimeDeploymentKeyProvisioner\YowThi.RuntimeDeploymentKeyProvisioner.csproj --configuration Release --nologo'
+
   acceptance-tests:
     runs-on: [self-hosted, yowthi-erp-dev-v4]
     timeout-minutes: 10

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yowthi.local/schemas/p31-runtime-deployment-key-receipt.schema.json",
+  "title": "YowThi P31 Runtime Deployment Key Receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion","keyName","keyId","userSid","keyScope","provider","algorithm","privateKeyExportable","publicKeySpkiBase64","spkiSha256","provisionedUtc"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "keyName": { "const": "YowThiRuntimeDeploymentSignerV1" },
+    "keyId": { "const": "p31-runtime-deployment-signer-user-v1" },
+    "userSid": { "type": "string", "minLength": 4, "maxLength": 184 },
+    "keyScope": { "const": "CurrentUser" },
+    "provider": { "const": "Microsoft Software Key Storage Provider" },
+    "algorithm": { "const": "ECDSA_P256" },
+    "privateKeyExportable": { "const": false },
+    "publicKeySpkiBase64": { "type": "string", "minLength": 32, "maxLength": 1024 },
+    "spkiSha256": { "type": "string", "pattern": "^[0-9A-Fa-f]{64}$" },
+    "provisionedUtc": { "type": "string", "format": "date-time" }
+  }
+}

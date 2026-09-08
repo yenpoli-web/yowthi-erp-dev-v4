@@ -6,10 +6,11 @@ namespace YowThi.RuntimeDeploymentSigner;
 internal static class SigningKeyGate
 {
     internal const string KeyName = "YowThiRuntimeDeploymentSignerV1";
-    internal const string SignerKeyId = "p30-runtime-deployment-signer-v1";
+    internal const string SignerKeyId = "p31-runtime-deployment-signer-user-v1";
 
-    // P30 intentionally ships without a provisioned signer key. P31 must provision the
-    // machine-scoped CNG key and replace this sentinel with its exact public SPKI SHA-256.
+    // P31 hardening: the signer key is CurrentUser-scoped and may only be reached through
+    // the active-console approval bridge. The exact public SPKI SHA remains fail-closed
+    // until the interactive key provisioner has produced a reviewed public receipt.
     internal const string ExpectedSignerSpkiSha256 = "0000000000000000000000000000000000000000000000000000000000000000";
 
     [ModuleInitializer]
@@ -30,7 +31,7 @@ internal static class SigningKeyGate
         var key = CngKey.Open(
             KeyName,
             CngProvider.MicrosoftSoftwareKeyStorageProvider,
-            CngKeyOpenOptions.MachineKey);
+            CngKeyOpenOptions.None);
 
         var algorithmGroup = key.AlgorithmGroup?.AlgorithmGroup ?? string.Empty;
         if (!string.Equals(algorithmGroup, CngAlgorithmGroup.ECDsa.AlgorithmGroup, StringComparison.OrdinalIgnoreCase))

@@ -11,7 +11,7 @@
     "requestId": { "type": "string", "pattern": "^[0-9A-Fa-f]{32}$" },
     "requestSha256": { "type": "string", "pattern": "^[0-9A-Fa-f]{64}$" },
     "executorSha256": { "type": "string", "pattern": "^[0-9A-Fa-f]{64}$" },
-    "signerKeyId": { "const": "p30-runtime-deployment-signer-v1" },
+    "signerKeyId": { "const": "p31-runtime-deployment-signer-user-v1" },
     "issuedUtc": { "type": "string", "format": "date-time" },
     "expiresUtc": { "type": "string", "format": "date-time" },
     "nonce": { "type": "string", "pattern": "^[0-9A-Fa-f]{32}$" },
