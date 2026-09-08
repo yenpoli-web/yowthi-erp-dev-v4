@@ -122,17 +122,17 @@ internal static class Program
             var failed = File.Exists(failedResult);
             if (completed == failed)
                 throw new InvalidOperationException("Runtime deployment executor terminal result is missing or ambiguous.");
-            if (child.ExitCode == 0 && !completed)
-                throw new InvalidOperationException("Runtime deployment executor exited successfully without a completion result.");
-            if (child.ExitCode != 0 && !failed)
-                throw new InvalidOperationException("Runtime deployment executor failed without a failed terminal result.");
+            if (failed)
+                throw new InvalidOperationException("Runtime deployment executor reported a failed terminal result.");
+            if (child.ExitCode != 0)
+                throw new InvalidOperationException("Runtime deployment executor returned a non-zero exit code despite a completion result.");
 
             WriteAuthorizerTerminal(AuthorizerCompletedRoot, approval.ApprovalId, new
             {
                 schemaVersion = 1,
                 approvalId = approval.ApprovalId,
                 requestId = approval.RequestId,
-                status = completed ? "completed" : "executor-failed",
+                status = "completed",
                 executorExitCode = child.ExitCode,
                 requestSha256 = approval.RequestSha256,
                 executorSha256 = approval.ExecutorSha256,

@@ -8,7 +8,7 @@ namespace YowThi.RuntimeDeploymentExecutor;
 internal static class AuthorizerParentGuard
 {
     private const string AuthorizerExe = @"C:\ProgramData\YowThi\RuntimeDeployment\YowThi.RuntimeDeploymentAuthorizer.exe";
-    private const string ExpectedAuthorizerExeSha256 = "7BD1F5AEFD057B06E420C2A4E20E7A3BB5A3A9F28C9A0AE324AF4F19A11E9AFE";
+    private const string ExpectedAuthorizerExeSha256 = "EC6CAE1D23127EA59D67F5EB3C380B59144C24A47B6C974350313501B4FD17CD";
 
     [ModuleInitializer]
     internal static void ValidateAtModuleLoad()

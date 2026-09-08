@@ -4,7 +4,7 @@ namespace YowThi.DotnetAcceptanceTests;
 
 public sealed class RuntimeDeploymentExecutorContractTests
 {
-    private const string AuthorizerSha = "7BD1F5AEFD057B06E420C2A4E20E7A3BB5A3A9F28C9A0AE324AF4F19A11E9AFE";
+    private const string AuthorizerSha = "EC6CAE1D23127EA59D67F5EB3C380B59144C24A47B6C974350313501B4FD17CD";
 
     [Fact]
     public void ExecutorSource_RequiresSeparatedAuthorizationAndExactIdentityBindings()
