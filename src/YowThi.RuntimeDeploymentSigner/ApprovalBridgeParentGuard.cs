@@ -8,7 +8,7 @@ namespace YowThi.RuntimeDeploymentSigner;
 internal static class ApprovalBridgeParentGuard
 {
     internal const string ApprovalBridgeExe = @"C:\ProgramData\YowThi\RuntimeDeployment\YowThi.RuntimeDeploymentApprovalBridge.exe";
-    internal const string ExpectedApprovalBridgeExeSha256 = "9FF4EAF2A642DEF2013ACF2356440E7B51B24A476303E7D91B1228D250337EF5";
+    internal const string ExpectedApprovalBridgeExeSha256 = "EAA32076285F957FB08A5D34C5252DF95F546981F51EFF5681BBEAF60A6A6AAB";
 
     [ModuleInitializer]
     internal static void ValidateAtModuleLoad()

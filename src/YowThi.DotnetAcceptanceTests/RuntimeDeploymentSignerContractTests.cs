@@ -5,7 +5,7 @@ namespace YowThi.DotnetAcceptanceTests;
 public sealed class RuntimeDeploymentSignerContractTests
 {
     private const string SignerSpkiSha = "3794BFF6F3FEB5B64F58A85F1CD9E4C526ACBFBDF2B51E25A27CEAF88124981A";
-    private const string BridgeSha = "9FF4EAF2A642DEF2013ACF2356440E7B51B24A476303E7D91B1228D250337EF5";
+    private const string BridgeSha = "EAA32076285F957FB08A5D34C5252DF95F546981F51EFF5681BBEAF60A6A6AAB";
     private const string AuthorizerSha = "7BD1F5AEFD057B06E420C2A4E20E7A3BB5A3A9F28C9A0AE324AF4F19A11E9AFE";
 
     [Fact]

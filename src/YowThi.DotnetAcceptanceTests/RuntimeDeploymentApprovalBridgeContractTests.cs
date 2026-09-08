@@ -45,7 +45,8 @@ public sealed class RuntimeDeploymentApprovalBridgeContractTests
         Assert.Contains("deploymentEnabled", source, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("SignerKey.Provisioned", source, StringComparison.Ordinal);
         Assert.Contains("ApprovalBridge.Provisioned", source, StringComparison.Ordinal);
-        Assert.Contains("Exactly one unexpired request-only runtime deployment request", source, StringComparison.Ordinal);
+        Assert.Contains("TryFindSingleEligibleRequest", source, StringComparison.Ordinal);
+        Assert.Contains("FindSingleEligibleBootstrapRequest", source, StringComparison.Ordinal);
         Assert.Contains("MessageBoxButtons.YesNo", source, StringComparison.Ordinal);
         Assert.Contains("YowThi.RuntimeDeploymentSigner.exe", source, StringComparison.Ordinal);
         Assert.Contains("YowThi.RuntimeDeploymentAuthorizer.exe", source, StringComparison.Ordinal);
@@ -55,7 +56,43 @@ public sealed class RuntimeDeploymentApprovalBridgeContractTests
         Assert.DoesNotContain("RunFixedChild(ExecutorExe", source, StringComparison.Ordinal);
         Assert.DoesNotContain("ControlService", source, StringComparison.Ordinal);
         Assert.DoesNotContain("StartService", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("runtime_handoff", source, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("runtime_handoff_activate", source, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(".agent3-handoff\\ready", source, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void BootstrapPromotion_RequiresInteractiveYesBeforeP27RequestWrite()
+    {
+        var source = File.ReadAllText(Source("YowThi.RuntimeDeploymentApprovalBridge", "Program.cs"));
+        Assert.Contains("\\.agent3-lifecycle\\pending", source, StringComparison.Ordinal);
+        Assert.Contains("agent-lifecycle-transition-request", source, StringComparison.Ordinal);
+        Assert.Contains("request-only", source, StringComparison.Ordinal);
+        Assert.Contains("request.ProcessAuthorization", source, StringComparison.Ordinal);
+        Assert.Contains("!request.RequiresSeparateRuntimePlans", source, StringComparison.Ordinal);
+        Assert.Contains("CreateDeploymentRequestFromBootstrap", source, StringComparison.Ordinal);
+        Assert.Contains("RequiresDedicatedSupervisorExecutor", source, StringComparison.Ordinal);
+
+        var confirm = source.IndexOf("ConfirmDeployment(releaseName", StringComparison.Ordinal);
+        var create = source.IndexOf("CreateDeploymentRequestFromBootstrap(", confirm + 1, StringComparison.Ordinal);
+        var write = source.IndexOf("WriteCreateNewJson(requestPath, generated)", create + 1, StringComparison.Ordinal);
+        Assert.True(confirm >= 0, "Bootstrap confirmation call is missing.");
+        Assert.True(create > confirm, "P27 request promotion must occur only after interactive confirmation.");
+        Assert.True(write > create, "P27 request bytes must be written only inside the post-confirmation bootstrap promotion path.");
+    }
+
+    [Fact]
+    public void BootstrapPromotion_RevalidatesSourceAndActiveIdentityBeforeP27Write()
+    {
+        var source = File.ReadAllText(Source("YowThi.RuntimeDeploymentApprovalBridge", "Program.cs"));
+        Assert.Contains("Bootstrap lifecycle request changed during interactive approval", source, StringComparison.Ordinal);
+        Assert.Contains("Bootstrap lifecycle request identity changed during interactive approval", source, StringComparison.Ordinal);
+        Assert.Contains("ReadActiveState()", source, StringComparison.Ordinal);
+        Assert.Contains("ValidateBootstrapTransitionRequest(bootstrap, bootstrapPath, active)", source, StringComparison.Ordinal);
+        Assert.Contains("A deployment request appeared during interactive bootstrap approval", source, StringComparison.Ordinal);
+        Assert.Contains("Path.GetFullPath(SupervisorExe)", source, StringComparison.Ordinal);
+        Assert.Contains("now.AddMinutes(5)", source, StringComparison.Ordinal);
+        Assert.Contains("false,\n            true,", source, StringComparison.Ordinal);
+        Assert.Contains("Generated P27 deployment request failed post-write identity readback", source, StringComparison.Ordinal);
     }
 
     [Fact]
