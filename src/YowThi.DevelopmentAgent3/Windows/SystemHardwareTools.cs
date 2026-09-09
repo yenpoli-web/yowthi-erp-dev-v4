@@ -18,7 +18,7 @@ public sealed class SystemHardwareTools
     private const string GraphicsConfigurationPath = @"SYSTEM\CurrentControlSet\Control\GraphicsDrivers\Configuration";
 
     [McpServerTool(Name = "system_hardware_info", ReadOnly = true, Destructive = false, OpenWorld = false)]
-    [Description("Read local Windows hardware and operating-system information using only native Windows APIs and the .NET Registry/Runtime APIs. Returns CPU identity and physical/logical processor counts, total physical memory, display adapters with best-effort dedicated video-memory metadata, active display modes, and Windows version metadata. This is read-only and does not use PowerShell, cmd, WMI command execution, shell execution, external utilities, network access, or generic command execution.")]
+    [Description("Read local Windows hardware and operating-system information using only native Windows APIs and the .NET Registry/Runtime APIs. Returns CPU identity and physical/logical processor counts, total physical memory, display adapters with best-effort dedicated video-memory and driver metadata, active display modes, and Windows version metadata. This is read-only and does not use PowerShell, cmd, WMI command execution, shell execution, external utilities, network access, or generic command execution.")]
     public static SystemHardwareInfoResult SystemHardwareInfo()
     {
         if (!OperatingSystem.IsWindows())
@@ -126,6 +126,7 @@ public sealed class SystemHardwareTools
                 continue;
 
             var memoryBytes = TryReadAdapterMemoryBytes(device.DeviceKey);
+            var driver = TryReadAdapterDriverMetadata(device.DeviceKey);
             result.Add(new GraphicsAdapterInfo(
                 index,
                 device.DeviceName?.TrimEnd('\0') ?? string.Empty,
@@ -133,7 +134,10 @@ public sealed class SystemHardwareTools
                 deviceId,
                 (device.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) != 0,
                 memoryBytes,
-                memoryBytes.HasValue ? BytesToGiB(memoryBytes.Value) : null));
+                memoryBytes.HasValue ? BytesToGiB(memoryBytes.Value) : null,
+                driver.Version,
+                driver.Provider,
+                driver.Date));
         }
 
         // Session 0 often has no interactive display-device enumeration. Fall back to the
@@ -168,13 +172,44 @@ public sealed class SystemHardwareTools
                     $"registry:{subKeyName}",
                     description,
                     deviceId,
-                    false,
+                    IsAdapterRepresentedInGraphicsConfiguration(deviceId),
                     memoryBytes,
-                    memoryBytes.HasValue ? BytesToGiB(memoryBytes.Value) : null));
+                    memoryBytes.HasValue ? BytesToGiB(memoryBytes.Value) : null,
+                    ReadRegistryString(adapterKey, "DriverVersion")?.Trim(),
+                    ReadRegistryString(adapterKey, "ProviderName")?.Trim(),
+                    ReadRegistryString(adapterKey, "DriverDate")?.Trim()));
             }
         }
 
         return result;
+    }
+
+    private static bool IsAdapterRepresentedInGraphicsConfiguration(string? deviceId)
+    {
+        if (string.IsNullOrWhiteSpace(deviceId))
+            return false;
+
+        var vendor = ExtractPciToken(deviceId, "VEN_");
+        var device = ExtractPciToken(deviceId, "DEV_");
+        if (vendor is null || device is null)
+            return false;
+
+        using var root = Registry.LocalMachine.OpenSubKey(GraphicsConfigurationPath, writable: false);
+        if (root is null)
+            return false;
+
+        var marker = $"{vendor}_{device}";
+        return root.GetSubKeyNames().Any(name => name.Contains(marker, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string? ExtractPciToken(string value, string marker)
+    {
+        var index = value.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (index < 0 || index + marker.Length + 4 > value.Length)
+            return null;
+
+        var token = value.Substring(index + marker.Length, 4);
+        return token.All(Uri.IsHexDigit) ? token.ToUpperInvariant() : null;
     }
 
     private static ulong? TryReadAdapterMemoryBytes(string? deviceKey)
@@ -199,6 +234,34 @@ public sealed class SystemHardwareTools
         catch (System.Security.SecurityException)
         {
             return null;
+        }
+    }
+
+    private static (string? Version, string? Provider, string? Date) TryReadAdapterDriverMetadata(string? deviceKey)
+    {
+        if (string.IsNullOrWhiteSpace(deviceKey))
+            return (null, null, null);
+
+        const string prefix = @"\Registry\Machine\";
+        if (!deviceKey.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            return (null, null, null);
+
+        var subKeyPath = deviceKey[prefix.Length..];
+        try
+        {
+            using var key = Registry.LocalMachine.OpenSubKey(subKeyPath, writable: false);
+            return (
+                ReadRegistryString(key, "DriverVersion")?.Trim(),
+                ReadRegistryString(key, "ProviderName")?.Trim(),
+                ReadRegistryString(key, "DriverDate")?.Trim());
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return (null, null, null);
+        }
+        catch (System.Security.SecurityException)
+        {
+            return (null, null, null);
         }
     }
 
@@ -261,7 +324,7 @@ public sealed class SystemHardwareTools
         }
 
         // On service/session-0 runtimes EnumDisplayDevices may be empty. GraphicsDrivers\Configuration
-        // retains the active surface geometry, so use it as a bounded read-only fallback.
+        // retains the active surface geometry and refresh rational, so use it as a bounded read-only fallback.
         using var configurationRoot = Registry.LocalMachine.OpenSubKey(GraphicsConfigurationPath, writable: false);
         if (configurationRoot is not null)
         {
@@ -296,25 +359,55 @@ public sealed class SystemHardwareTools
                 if (width is null or <= 0 || height is null or <= 0)
                     continue;
 
-                var numerator = ReadRegistryInt(modeKey, "RefreshRate.Numerator");
-                var denominator = ReadRegistryInt(modeKey, "RefreshRate.Denominator");
-                var refreshRate = numerator.HasValue && denominator is > 0
-                    ? (int)Math.Round(numerator.Value / (double)denominator.Value, MidpointRounding.AwayFromZero)
-                    : 0;
-
                 yield return new DisplayModeInfo(
                     $"registry:{configurationName}",
                     "GraphicsDrivers Configuration",
                     width.Value,
                     height.Value,
-                    refreshRate,
-                    0);
+                    ReadRefreshRate(modeKey),
+                    ReadBitsPerPixel(modeKey));
 
                 emitted++;
                 if (emitted >= 16)
                     yield break;
             }
         }
+    }
+
+    private static int ReadRefreshRate(RegistryKey key)
+    {
+        foreach (var prefix in new[] { "RefreshRate", "VirtualRefreshRate" })
+        {
+            var numerator = ReadRegistryInt64(key, $"{prefix}.Numerator");
+            var denominator = ReadRegistryInt64(key, $"{prefix}.Denominator");
+            if (numerator is > 0 && denominator is > 0)
+            {
+                var hz = (int)Math.Round(numerator.Value / (double)denominator.Value, MidpointRounding.AwayFromZero);
+                if (hz is > 0 and <= 1000)
+                    return hz;
+            }
+        }
+
+        foreach (var name in new[] { "RefreshRate", "VirtualRefreshRate", "DefaultSettings.VRefresh" })
+        {
+            var value = ReadRegistryInt64(key, name);
+            if (value is > 0 and <= 1000)
+                return checked((int)value.Value);
+        }
+
+        return 0;
+    }
+
+    private static int ReadBitsPerPixel(RegistryKey key)
+    {
+        foreach (var name in new[] { "BitsPerPixel", "BitsPerPel", "ColorDepth" })
+        {
+            var value = ReadRegistryInt64(key, name);
+            if (value is > 0 and <= 128)
+                return checked((int)value.Value);
+        }
+
+        return 0;
     }
 
     private static WindowsInfo ReadWindows()
@@ -349,11 +442,20 @@ public sealed class SystemHardwareTools
 
     private static int? ReadRegistryInt(RegistryKey key, string name)
     {
+        var value = ReadRegistryInt64(key, name);
+        return value is >= int.MinValue and <= int.MaxValue ? checked((int)value.Value) : null;
+    }
+
+    private static long? ReadRegistryInt64(RegistryKey key, string name)
+    {
         var value = key.GetValue(name, null, RegistryValueOptions.DoNotExpandEnvironmentNames);
         return value switch
         {
             int i => i,
-            long l when l is >= int.MinValue and <= int.MaxValue => checked((int)l),
+            long l => l,
+            uint ui => ui,
+            byte[] bytes when bytes.Length >= 8 => BitConverter.ToInt64(bytes, 0),
+            byte[] bytes when bytes.Length >= 4 => BitConverter.ToInt32(bytes, 0),
             _ => null
         };
     }
@@ -480,7 +582,10 @@ public sealed record GraphicsAdapterInfo(
     string DeviceId,
     bool AttachedToDesktop,
     ulong? DedicatedMemoryBytes,
-    double? DedicatedMemoryGiB);
+    double? DedicatedMemoryGiB,
+    string? DriverVersion,
+    string? DriverProvider,
+    string? DriverDate);
 
 public sealed record DisplayModeInfo(
     string DeviceName,
