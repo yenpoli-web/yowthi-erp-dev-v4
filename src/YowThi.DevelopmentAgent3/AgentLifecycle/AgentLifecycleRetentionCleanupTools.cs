@@ -15,11 +15,13 @@ public static class AgentLifecycleRetentionCleanupTools
     private const string ReleaseRoot = @"C:\Dev\YowThi-ERP-Dev-v4\acceptance\agent-lifecycle\releases";
     private const string RollbackRoot = @"C:\Dev\YowThi-ERP-Dev-v4\acceptance\agent-lifecycle\rollback";
     private const string PendingRoot = @"C:\Dev\YowThi-ERP-Dev-v4\.agent3-lifecycle\pending";
+    private const string ActiveStatePath = @"C:\Dev\YowThi-ERP-Dev-v4\.agent3-handoff\active-runtime.json";
     private const string RuntimeFileName = "YowThi.DevelopmentAgent3.dll";
     private const int MaxEntries = 10_000;
     private const long MaxPackageBytes = 4L * 1024 * 1024 * 1024;
     private const long MaxSingleFileBytes = 2L * 1024 * 1024 * 1024;
     private const long MaxRequestBytes = 128 * 1024;
+    private const long MaxActiveStateBytes = 128 * 1024;
 
     private static readonly byte[] SigningKey = SHA256.HashData(Encoding.UTF8.GetBytes("YowThi-Agent3-Development-Key-v1"));
     private static readonly PlanSigner Signer = new(SigningKey);
@@ -27,40 +29,41 @@ public static class AgentLifecycleRetentionCleanupTools
     private static readonly AuditChain Audit = new(@"C:\Dev\YowThi-ERP-Dev-v4\.agent3-audit");
 
     [McpServerTool(Name = "agent_lifecycle_release_cleanup_inventory", ReadOnly = true, Destructive = false, OpenWorld = false)]
-    [Description("Inventory direct Agent lifecycle releases under the fixed release store and classify retention eligibility. Current runtime package, the two newest other releases, any package whose runtime SHA-256 is referenced by a pending lifecycle request, reparse-point packages, invalid packages, and running-process referenced packages are protected. This is read-only.")]
+    [Description("Inventory direct Agent lifecycle releases under the fixed release store and classify retention eligibility. Current runtime package, active-state current/previous releases, the two newest other releases, any package whose runtime SHA-256 is referenced by a pending lifecycle request, reparse-point packages, invalid packages, and running-process referenced packages are protected. This is read-only.")]
     public static AgentLifecycleRetentionInventoryResult AgentLifecycleReleaseCleanupInventory()
-        => BuildInventory(ReleaseRoot, "release", protectNewestCount: 2, protectPendingRuntimeHashes: true);
+        => BuildInventory(ReleaseRoot, "release", protectNewestCount: 2, protectPendingRuntimeHashes: true, protectActiveStateReferences: true);
 
     [McpServerTool(Name = "agent_lifecycle_release_cleanup_plan", ReadOnly = false, Destructive = true, OpenWorld = false)]
-    [Description("Prepare a one-time signed Medium-risk plan to delete exactly one release classified eligible by the fixed lifecycle retention policy. Caller supplies only the direct release name. Exact package manifest, runtime SHA-256, retention classification, pending references, fixed-root identity, running-process exclusion, and reparse policy are sealed. Current/recent/referenced packages and arbitrary paths are rejected.")]
+    [Description("Prepare a one-time signed Medium-risk plan to delete exactly one release classified eligible by the fixed lifecycle retention policy. Caller supplies only the direct release name. Exact package manifest, runtime SHA-256, retention classification, pending references, active-state fingerprint, fixed-root identity, running-process exclusion, and reparse policy are sealed. Current/recent/active-state-referenced packages and arbitrary paths are rejected.")]
     public static SignedPlan AgentLifecycleReleaseCleanupPlan(string releaseName)
-        => PrepareCleanupPlan(ReleaseRoot, "release", releaseName, protectNewestCount: 2, protectPendingRuntimeHashes: true);
+        => PrepareCleanupPlan(ReleaseRoot, "release", releaseName, protectNewestCount: 2, protectPendingRuntimeHashes: true, protectActiveStateReferences: true);
 
     [McpServerTool(Name = "agent_lifecycle_release_cleanup_execute", ReadOnly = false, Destructive = true, OpenWorld = false)]
-    [Description("Execute one previously prepared fixed lifecycle release cleanup plan using only native File.Delete and non-recursive Directory.Delete. Exact package identity, manifest, retention classification, pending references, running-process exclusion, fixed root and reparse policy are revalidated immediately before deletion. Only planId and approvalCode are accepted.")]
+    [Description("Execute one previously prepared fixed lifecycle release cleanup plan using only native File.Delete and non-recursive Directory.Delete. Exact package identity, manifest, retention classification, pending references, active-state current/previous references, fixed root and reparse policy are revalidated immediately before deletion. Only planId and approvalCode are accepted.")]
     public static AgentLifecycleRetentionCleanupResult AgentLifecycleReleaseCleanupExecute(string planId, string approvalCode)
-        => ExecuteCleanup(planId, approvalCode, ReleaseRoot, "release", protectNewestCount: 2, protectPendingRuntimeHashes: true);
+        => ExecuteCleanup(planId, approvalCode, ReleaseRoot, "release", protectNewestCount: 2, protectPendingRuntimeHashes: true, protectActiveStateReferences: true);
 
     [McpServerTool(Name = "agent_lifecycle_rollback_cleanup_inventory", ReadOnly = true, Destructive = false, OpenWorld = false)]
     [Description("Inventory direct Agent lifecycle rollback backups under the fixed rollback store and classify retention eligibility. The two newest rollback backups, any package whose runtime SHA-256 is referenced by a pending lifecycle request, reparse-point packages, invalid packages, and running-process referenced packages are protected. This is read-only.")]
     public static AgentLifecycleRetentionInventoryResult AgentLifecycleRollbackCleanupInventory()
-        => BuildInventory(RollbackRoot, "rollback", protectNewestCount: 2, protectPendingRuntimeHashes: true);
+        => BuildInventory(RollbackRoot, "rollback", protectNewestCount: 2, protectPendingRuntimeHashes: true, protectActiveStateReferences: false);
 
     [McpServerTool(Name = "agent_lifecycle_rollback_cleanup_plan", ReadOnly = false, Destructive = true, OpenWorld = false)]
     [Description("Prepare a one-time signed Medium-risk plan to delete exactly one rollback backup classified eligible by the fixed lifecycle retention policy. Caller supplies only the direct rollback name. Exact package manifest, runtime SHA-256, retention classification, pending references, fixed-root identity, running-process exclusion, and reparse policy are sealed. Recent/referenced packages and arbitrary paths are rejected.")]
     public static SignedPlan AgentLifecycleRollbackCleanupPlan(string backupName)
-        => PrepareCleanupPlan(RollbackRoot, "rollback", backupName, protectNewestCount: 2, protectPendingRuntimeHashes: true);
+        => PrepareCleanupPlan(RollbackRoot, "rollback", backupName, protectNewestCount: 2, protectPendingRuntimeHashes: true, protectActiveStateReferences: false);
 
     [McpServerTool(Name = "agent_lifecycle_rollback_cleanup_execute", ReadOnly = false, Destructive = true, OpenWorld = false)]
     [Description("Execute one previously prepared fixed lifecycle rollback cleanup plan using only native File.Delete and non-recursive Directory.Delete. Exact package identity, manifest, retention classification, pending references, running-process exclusion, fixed root and reparse policy are revalidated immediately before deletion. Only planId and approvalCode are accepted.")]
     public static AgentLifecycleRetentionCleanupResult AgentLifecycleRollbackCleanupExecute(string planId, string approvalCode)
-        => ExecuteCleanup(planId, approvalCode, RollbackRoot, "rollback", protectNewestCount: 2, protectPendingRuntimeHashes: true);
+        => ExecuteCleanup(planId, approvalCode, RollbackRoot, "rollback", protectNewestCount: 2, protectPendingRuntimeHashes: true, protectActiveStateReferences: false);
 
-    private static AgentLifecycleRetentionInventoryResult BuildInventory(string root, string kind, int protectNewestCount, bool protectPendingRuntimeHashes)
+    private static AgentLifecycleRetentionInventoryResult BuildInventory(string root, string kind, int protectNewestCount, bool protectPendingRuntimeHashes, bool protectActiveStateReferences)
     {
         ValidateFixedRoot(root);
         var currentPackage = Path.GetFullPath(Path.GetDirectoryName(typeof(AgentLifecycleRetentionCleanupTools).Assembly.Location)!);
         var pending = ReadPendingRuntimeReferences();
+        var active = protectActiveStateReferences ? ReadActiveRuntimeReferences() : ActiveReferences.None;
         var directories = Directory.EnumerateDirectories(root, "*", SearchOption.TopDirectoryOnly)
             .Select(Path.GetFullPath)
             .OrderByDescending(p => Directory.GetLastWriteTimeUtc(p))
@@ -84,6 +87,8 @@ public static class AgentLifecycleRetentionCleanupTools
                 var snapshot = Snapshot(path);
                 var reasons = new List<string>();
                 if (string.Equals(path, currentPackage, StringComparison.OrdinalIgnoreCase)) reasons.Add("current-runtime");
+                if (protectActiveStateReferences && string.Equals(path, active.CurrentPackagePath, StringComparison.OrdinalIgnoreCase)) reasons.Add("active-state-current-reference");
+                if (protectActiveStateReferences && active.PreviousPackagePath is not null && string.Equals(path, active.PreviousPackagePath, StringComparison.OrdinalIgnoreCase)) reasons.Add("active-state-previous-reference");
                 if (protectedRecent.Contains(path)) reasons.Add("recent-retention");
                 if (protectPendingRuntimeHashes && pending.RuntimeHashes.Contains(snapshot.RuntimeSha256)) reasons.Add("pending-request-reference");
                 if (IsReferencedByRunningProcess(path)) reasons.Add("running-process-reference");
@@ -98,10 +103,10 @@ public static class AgentLifecycleRetentionCleanupTools
         return new(kind, items.Count, items.Count(x => x.EligibleForCleanup), items, pending.RequestNames, DateTimeOffset.UtcNow);
     }
 
-    private static SignedPlan PrepareCleanupPlan(string root, string kind, string name, int protectNewestCount, bool protectPendingRuntimeHashes)
+    private static SignedPlan PrepareCleanupPlan(string root, string kind, string name, int protectNewestCount, bool protectPendingRuntimeHashes, bool protectActiveStateReferences)
     {
         var leaf = ValidateSafeName(name, nameof(name));
-        var inventory = BuildInventory(root, kind, protectNewestCount, protectPendingRuntimeHashes);
+        var inventory = BuildInventory(root, kind, protectNewestCount, protectPendingRuntimeHashes, protectActiveStateReferences);
         var candidate = inventory.Candidates.SingleOrDefault(x => string.Equals(x.Name, leaf, StringComparison.OrdinalIgnoreCase))
             ?? throw new DirectoryNotFoundException($"Lifecycle {kind} package not found: {leaf}");
         if (!candidate.EligibleForCleanup) throw new InvalidOperationException($"Lifecycle {kind} package is protected by retention policy: {candidate.Classification}");
@@ -109,6 +114,8 @@ public static class AgentLifecycleRetentionCleanupTools
         if (IsReferencedByRunningProcess(candidate.Path)) throw new InvalidOperationException("Lifecycle package is referenced by a running process.");
         var pending = ReadPendingRuntimeReferences();
         if (protectPendingRuntimeHashes && pending.RuntimeHashes.Contains(snapshot.RuntimeSha256)) throw new InvalidOperationException("Lifecycle package is referenced by a pending request.");
+        var active = protectActiveStateReferences ? ReadActiveRuntimeReferences() : ActiveReferences.None;
+        if (protectActiveStateReferences && active.IsReferenced(candidate.Path)) throw new InvalidOperationException("Lifecycle release is referenced by active runtime state.");
 
         var parameters = new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -123,6 +130,7 @@ public static class AgentLifecycleRetentionCleanupTools
             ["totalBytes"] = snapshot.TotalBytes.ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["classification"] = "eligible",
             ["pendingFingerprint"] = pending.Fingerprint,
+            ["activeStateFingerprint"] = active.Fingerprint,
             ["retentionNewestCount"] = protectNewestCount.ToString(System.Globalization.CultureInfo.InvariantCulture)
         };
         var now = DateTimeOffset.UtcNow;
@@ -131,11 +139,11 @@ public static class AgentLifecycleRetentionCleanupTools
             $"Delete one lifecycle {kind} package {leaf} verified eligible by retention policy", now, now.AddMinutes(10), string.Empty);
         var signed = unsigned with { Signature = Signer.Sign(unsigned) };
         Store.Add(signed);
-        Audit.Append(signed.Tool, signed.Operation, signed.Target, new { signed.PlanId, kind, leaf, snapshot.RuntimeSha256, snapshot.ManifestSha256 }, "prepared");
+        Audit.Append(signed.Tool, signed.Operation, signed.Target, new { signed.PlanId, kind, leaf, snapshot.RuntimeSha256, snapshot.ManifestSha256, activeStateFingerprint = active.Fingerprint }, "prepared");
         return signed;
     }
 
-    private static AgentLifecycleRetentionCleanupResult ExecuteCleanup(string planId, string approvalCode, string root, string kind, int protectNewestCount, bool protectPendingRuntimeHashes)
+    private static AgentLifecycleRetentionCleanupResult ExecuteCleanup(string planId, string approvalCode, string root, string kind, int protectNewestCount, bool protectPendingRuntimeHashes, bool protectActiveStateReferences)
     {
         var plan = Store.GetValidated(planId, approvalCode);
         if (!string.Equals(plan.Tool, "agent-lifecycle-retention-cleanup", StringComparison.Ordinal) ||
@@ -146,13 +154,17 @@ public static class AgentLifecycleRetentionCleanupTools
         if (!string.Equals(path, plan.Target, StringComparison.OrdinalIgnoreCase) || !string.Equals(path, Require(plan, "path"), StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Lifecycle retention cleanup target changed.");
 
-        var inventory = BuildInventory(root, kind, protectNewestCount, protectPendingRuntimeHashes);
+        var inventory = BuildInventory(root, kind, protectNewestCount, protectPendingRuntimeHashes, protectActiveStateReferences);
         var candidate = inventory.Candidates.SingleOrDefault(x => string.Equals(x.Name, name, StringComparison.OrdinalIgnoreCase))
             ?? throw new DirectoryNotFoundException("Lifecycle package no longer exists.");
         if (!candidate.EligibleForCleanup) throw new InvalidOperationException($"Lifecycle package is no longer eligible for cleanup: {candidate.Classification}");
         var pending = ReadPendingRuntimeReferences();
         if (!string.Equals(pending.Fingerprint, Require(plan, "pendingFingerprint"), StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Lifecycle pending-request set changed after plan preparation.");
+        var active = protectActiveStateReferences ? ReadActiveRuntimeReferences() : ActiveReferences.None;
+        if (!string.Equals(active.Fingerprint, Require(plan, "activeStateFingerprint"), StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Active runtime state changed after cleanup plan preparation.");
+        if (protectActiveStateReferences && active.IsReferenced(path)) throw new InvalidOperationException("Lifecycle release became referenced by active runtime state.");
 
         var snapshot = Snapshot(path);
         if (!string.Equals(snapshot.RuntimeSha256, Require(plan, "runtimeSha256"), StringComparison.OrdinalIgnoreCase) ||
@@ -166,7 +178,7 @@ public static class AgentLifecycleRetentionCleanupTools
         DeleteTreeNative(path);
         if (Directory.Exists(path) || File.Exists(path)) throw new IOException("Lifecycle package still exists after cleanup.");
         Store.Consume(planId);
-        Audit.Append(plan.Tool, plan.Operation, plan.Target, new { plan.PlanId, kind, name, snapshot.RuntimeSha256, snapshot.ManifestSha256, outcome = "deleted" }, "executed");
+        Audit.Append(plan.Tool, plan.Operation, plan.Target, new { plan.PlanId, kind, name, snapshot.RuntimeSha256, snapshot.ManifestSha256, activeStateFingerprint = active.Fingerprint, outcome = "deleted" }, "executed");
         return new(plan.PlanId, kind, name, path, snapshot.RuntimeSha256, snapshot.ManifestSha256, snapshot.FileCount, snapshot.DirectoryCount, snapshot.TotalBytes, "deleted", DateTimeOffset.UtcNow);
     }
 
@@ -237,6 +249,53 @@ public static class AgentLifecycleRetentionCleanupTools
         return new(hashes, names, HashCanonical(lines));
     }
 
+    private static ActiveReferences ReadActiveRuntimeReferences()
+    {
+        if (!File.Exists(ActiveStatePath)) throw new FileNotFoundException("Active runtime state is required for release cleanup.", ActiveStatePath);
+        if ((File.GetAttributes(ActiveStatePath) & FileAttributes.ReparsePoint) != 0) throw new UnauthorizedAccessException("Active runtime state may not be a reparse point.");
+        var info = new FileInfo(ActiveStatePath);
+        if (info.Length <= 0 || info.Length > MaxActiveStateBytes) throw new InvalidDataException("Active runtime state size invalid.");
+        var bytes = File.ReadAllBytes(ActiveStatePath);
+        var fingerprint = Convert.ToHexString(SHA256.HashData(bytes));
+        using var doc = JsonDocument.Parse(bytes);
+        var root = doc.RootElement;
+        if (!root.TryGetProperty("schemaVersion", out var schema) || schema.ValueKind != JsonValueKind.Number || schema.GetInt32() != 2)
+            throw new InvalidDataException("Active runtime state schemaVersion must be 2.");
+        if (!root.TryGetProperty("current", out var currentElement) || currentElement.ValueKind != JsonValueKind.Object)
+            throw new InvalidDataException("Active runtime state current slot is required.");
+        var current = ReadActiveSlot(currentElement, "current");
+        ActiveSlot? previous = null;
+        if (root.TryGetProperty("previous", out var previousElement) && previousElement.ValueKind != JsonValueKind.Null)
+        {
+            if (previousElement.ValueKind != JsonValueKind.Object) throw new InvalidDataException("Active runtime state previous slot is invalid.");
+            previous = ReadActiveSlot(previousElement, "previous");
+        }
+        return new(current.PackagePath, previous?.PackagePath, fingerprint);
+    }
+
+    private static ActiveSlot ReadActiveSlot(JsonElement element, string name)
+    {
+        var runtimeDllValue = element.GetProperty("runtimeDll").GetString() ?? throw new InvalidDataException($"Active runtime {name} runtimeDll is required.");
+        var runtimeSha = element.GetProperty("runtimeSha256").GetString() ?? throw new InvalidDataException($"Active runtime {name} runtimeSha256 is required.");
+        if (runtimeSha.Length != 64 || runtimeSha.Any(c => !Uri.IsHexDigit(c))) throw new InvalidDataException($"Active runtime {name} SHA-256 is invalid.");
+        var runtimeDll = Path.GetFullPath(runtimeDllValue);
+        if (!string.Equals(Path.GetFileName(runtimeDll), RuntimeFileName, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"Active runtime {name} DLL name is invalid.");
+        var packagePath = Path.GetDirectoryName(runtimeDll)?.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            ?? throw new InvalidDataException($"Active runtime {name} package path is missing.");
+        var releaseRoot = Path.GetFullPath(ReleaseRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var parent = Path.GetDirectoryName(packagePath)?.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (!string.Equals(parent, releaseRoot, StringComparison.OrdinalIgnoreCase)) throw new UnauthorizedAccessException($"Active runtime {name} must be one direct staged release.");
+        ValidateFixedRoot(ReleaseRoot);
+        if (!Directory.Exists(packagePath)) throw new DirectoryNotFoundException($"Active runtime {name} package does not exist: {packagePath}");
+        if ((File.GetAttributes(packagePath) & FileAttributes.ReparsePoint) != 0) throw new UnauthorizedAccessException($"Active runtime {name} package may not be a reparse point.");
+        if (!File.Exists(runtimeDll)) throw new FileNotFoundException($"Active runtime {name} DLL does not exist.", runtimeDll);
+        if ((File.GetAttributes(runtimeDll) & FileAttributes.ReparsePoint) != 0) throw new UnauthorizedAccessException($"Active runtime {name} DLL may not be a reparse point.");
+        using var stream = new FileStream(runtimeDll, FileMode.Open, FileAccess.Read, FileShare.Read);
+        var actualSha = Convert.ToHexString(SHA256.HashData(stream));
+        if (!string.Equals(actualSha, runtimeSha, StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException($"Active runtime {name} DLL SHA-256 mismatch.");
+        return new(packagePath, runtimeSha.ToUpperInvariant());
+    }
+
     private static bool IsReferencedByRunningProcess(string packagePath)
     {
         var full = Path.GetFullPath(packagePath).TrimEnd('\\') + "\\";
@@ -300,6 +359,14 @@ public static class AgentLifecycleRetentionCleanupTools
     private sealed record Entry(string RelativePath, bool IsDirectory, long Length, string Sha256);
     private sealed record PackageSnapshot(string RuntimeSha256, string ManifestSha256, string ShapeSha256, int FileCount, int DirectoryCount, long TotalBytes);
     private sealed record PendingReferences(HashSet<string> RuntimeHashes, IReadOnlyList<string> RequestNames, string Fingerprint);
+    private sealed record ActiveSlot(string PackagePath, string RuntimeSha256);
+    private sealed record ActiveReferences(string CurrentPackagePath, string? PreviousPackagePath, string Fingerprint)
+    {
+        public static ActiveReferences None { get; } = new(string.Empty, null, "NOT-APPLICABLE");
+        public bool IsReferenced(string packagePath)
+            => string.Equals(packagePath, CurrentPackagePath, StringComparison.OrdinalIgnoreCase) ||
+               (PreviousPackagePath is not null && string.Equals(packagePath, PreviousPackagePath, StringComparison.OrdinalIgnoreCase));
+    }
 }
 
 public sealed record AgentLifecycleRetentionCandidate(string Name, string Path, string RuntimeSha256, string ManifestSha256, int FileCount, int DirectoryCount, long TotalBytes, bool EligibleForCleanup, string Classification, DateTime LastWriteTimeUtc);
