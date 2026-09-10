@@ -6,6 +6,8 @@ using YowThi.DevelopmentAgent3.Security;
 YowThi.DevelopmentAgent3.Windows.DesktopDpiAwareness.EnableForInteractiveHelper(args);
 if (await YowThi.DevelopmentAgent3.Windows.InteractiveDesktopCaptureTools.TryRunHelperAsync(args))
     return;
+if (await YowThi.DevelopmentAgent3.Windows.InteractiveDesktopKeyboardBridge.TryRunHelperAsync(args))
+    return;
 if (await YowThi.DevelopmentAgent3.Windows.InteractiveDesktopSessionBridge.TryRunHelperAsync(args))
     return;
 
