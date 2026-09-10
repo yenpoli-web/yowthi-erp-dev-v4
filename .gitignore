@@ -9,6 +9,7 @@ runtime-supervisor/
 .agent3-audit/
 .agent3-handoff/
 .agent3-lifecycle/
+.runtime-supervisor-deployment/
 
 # YowThi transactional backups
 *.yowthi-*.bak
