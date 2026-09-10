@@ -3,7 +3,10 @@ using ModelContextProtocol.Server;
 using YowThi.DevelopmentAgent3.Runtime;
 using YowThi.DevelopmentAgent3.Security;
 
+YowThi.DevelopmentAgent3.Windows.DesktopDpiAwareness.EnableForInteractiveHelper(args);
 if (await YowThi.DevelopmentAgent3.Windows.InteractiveDesktopCaptureTools.TryRunHelperAsync(args))
+    return;
+if (await YowThi.DevelopmentAgent3.Windows.InteractiveDesktopSessionBridge.TryRunHelperAsync(args))
     return;
 
 var builder = WebApplication.CreateBuilder(args);
