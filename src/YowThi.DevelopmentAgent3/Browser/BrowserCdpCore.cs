@@ -658,7 +658,7 @@ internal static class BrowserEditorBridge
     internal static async Task<BrowserEditorDiagnosticsResult> GetDiagnosticsAsync(string tabId, CancellationToken cancellationToken = default)
     {
         tabId = BrowserCdpValidation.RequireTabId(tabId);
-        const string expression = """
+        var expression = $$"""
             (() => {
               const out = [];
               {{BrowserFrameScript.BuildContextPrelude()}}
