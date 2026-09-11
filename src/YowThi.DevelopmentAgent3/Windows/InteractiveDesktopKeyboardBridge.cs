@@ -1,8 +1,10 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
-using System.IO.Pipes;
+using System.Net;
+using System.Net.Sockets;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
@@ -28,6 +30,7 @@ internal static class InteractiveDesktopKeyboardBridge
     private const uint WAIT_TIMEOUT = 0x102;
 
     private sealed record HelperRequest(string? Hwnd = null, string? Shortcut = null, string? Text = null);
+    private sealed record HelperWireRequest(string Token, string Action, HelperRequest Request);
     private sealed record HelperEnvelope(bool Success, string? Error, string? Json, int HelperProcessId, int SessionId);
 
     internal static void KeyboardShortcut(string hwnd, string shortcut)
@@ -36,41 +39,55 @@ internal static class InteractiveDesktopKeyboardBridge
     internal static void TextInput(string hwnd, string text)
         => InvokeAck("text-input", new HelperRequest(Hwnd: hwnd, Text: text));
 
-    internal static async Task<bool> TryRunHelperAsync(string[] args)
+    internal static Task<bool> TryRunHelperAsync(string[] args)
     {
         if (!args.Any(x => string.Equals(x, HelperSwitch, StringComparison.Ordinal)))
-            return false;
+            return Task.FromResult(false);
 
-        string? pipeHandle = null;
-        string? action = null;
-        string? requestBase64 = null;
+        int? port = null;
+        string? token = null;
         for (var i = 0; i < args.Length; i++)
         {
-            if (string.Equals(args[i], "--pipe", StringComparison.Ordinal) && i + 1 < args.Length) pipeHandle = args[++i];
-            else if (string.Equals(args[i], "--action", StringComparison.Ordinal) && i + 1 < args.Length) action = args[++i];
-            else if (string.Equals(args[i], "--request", StringComparison.Ordinal) && i + 1 < args.Length) requestBase64 = args[++i];
+            if (string.Equals(args[i], "--port", StringComparison.Ordinal) && i + 1 < args.Length && int.TryParse(args[++i], NumberStyles.None, CultureInfo.InvariantCulture, out var parsedPort)) port = parsedPort;
+            else if (string.Equals(args[i], "--token", StringComparison.Ordinal) && i + 1 < args.Length) token = args[++i];
         }
 
-        if (string.IsNullOrWhiteSpace(pipeHandle)) return true;
-        await using var pipe = new AnonymousPipeClientStream(PipeDirection.Out, pipeHandle);
+        if (port is null || port <= 0 || port > 65535 || string.IsNullOrWhiteSpace(token))
+            return Task.FromResult(true);
+
         HelperEnvelope envelope;
         try
         {
-            var request = DecodeRequest(requestBase64);
-            var result = ExecuteHelperAction(action ?? string.Empty, request);
+            using var client = new TcpClient(AddressFamily.InterNetwork);
+            client.Connect(IPAddress.Loopback, port.Value);
+            using var stream = client.GetStream();
+            ConfigureTimeouts(stream);
+
+            var wire = ReadFrame<HelperWireRequest>(stream, MaxRequestBytes);
+            if (!FixedTimeTokenEquals(token, wire.Token))
+                throw new UnauthorizedAccessException("Interactive keyboard helper token validation failed.");
+
+            var result = ExecuteHelperAction(wire.Action, wire.Request);
             envelope = new HelperEnvelope(true, null, result, Environment.ProcessId, Process.GetCurrentProcess().SessionId);
+            WriteFrame(stream, envelope, MaxPayloadBytes);
         }
         catch (Exception ex)
         {
             envelope = new HelperEnvelope(false, SanitizeError(ex), null, Environment.ProcessId, Process.GetCurrentProcess().SessionId);
+            try
+            {
+                using var client = new TcpClient(AddressFamily.InterNetwork);
+                client.Connect(IPAddress.Loopback, port.Value);
+                using var stream = client.GetStream();
+                ConfigureTimeouts(stream);
+                WriteFrame(stream, envelope, MaxPayloadBytes);
+            }
+            catch
+            {
+            }
         }
 
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(envelope);
-        if (bytes.Length > MaxPayloadBytes) throw new InvalidDataException("Interactive keyboard helper response exceeded the bounded limit.");
-        await pipe.WriteAsync(BitConverter.GetBytes(bytes.Length));
-        await pipe.WriteAsync(bytes);
-        await pipe.FlushAsync();
-        return true;
+        return Task.FromResult(true);
     }
 
     private static string ExecuteHelperAction(string action, HelperRequest request)
@@ -102,9 +119,13 @@ internal static class InteractiveDesktopKeyboardBridge
 
         IntPtr environment = IntPtr.Zero;
         PROCESS_INFORMATION processInfo = default;
-        using var pipe = new AnonymousPipeServerStream(PipeDirection.In, HandleInheritability.Inheritable);
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
         try
         {
+            listener.Start(1);
+            var endpoint = (IPEndPoint)listener.LocalEndpoint;
+            var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+
             if (!CreateEnvironmentBlock(out environment, userToken, false))
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "Unable to create the interactive user environment.");
             ValidateFixedDotnetHost();
@@ -116,28 +137,26 @@ internal static class InteractiveDesktopKeyboardBridge
             AppendQuotedArgument(command, DotnetExe);
             AppendQuotedArgument(command, runtimeDll);
             AppendQuotedArgument(command, HelperSwitch);
-            AppendQuotedArgument(command, "--pipe");
-            AppendQuotedArgument(command, pipe.GetClientHandleAsString());
-            AppendQuotedArgument(command, "--action");
-            AppendQuotedArgument(command, action);
-            AppendQuotedArgument(command, "--request");
-            AppendQuotedArgument(command, Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(request)));
+            AppendQuotedArgument(command, "--port");
+            AppendQuotedArgument(command, endpoint.Port.ToString(CultureInfo.InvariantCulture));
+            AppendQuotedArgument(command, "--token");
+            AppendQuotedArgument(command, token);
 
             var startup = new STARTUPINFO { cb = Marshal.SizeOf<STARTUPINFO>(), lpDesktop = @"winsta0\default" };
             const uint CREATE_UNICODE_ENVIRONMENT = 0x00000400;
             const uint CREATE_NO_WINDOW = 0x08000000;
-            if (!CreateProcessAsUserW(userToken, DotnetExe, command, IntPtr.Zero, IntPtr.Zero, true, CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW, environment, Path.GetDirectoryName(runtimeDll), ref startup, out processInfo))
+            if (!CreateProcessAsUserW(userToken, DotnetExe, command, IntPtr.Zero, IntPtr.Zero, false, CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW, environment, Path.GetDirectoryName(runtimeDll), ref startup, out processInfo))
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "Unable to launch the interactive keyboard helper in the active console session.");
 
-            pipe.DisposeLocalCopyOfClientHandle();
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(HelperTimeoutSeconds));
-            var prefix = new byte[4];
-            ReadExactly(pipe, prefix, cts.Token);
-            var payloadLength = BitConverter.ToInt32(prefix, 0);
-            if (payloadLength <= 0 || payloadLength > MaxPayloadBytes) throw new InvalidDataException("Interactive keyboard helper returned an invalid payload length.");
-            var payload = new byte[payloadLength];
-            ReadExactly(pipe, payload, cts.Token);
-            var envelope = JsonSerializer.Deserialize<HelperEnvelope>(payload) ?? throw new InvalidDataException("Interactive keyboard helper returned an invalid envelope.");
+            using var client = listener.AcceptTcpClientAsync(cts.Token).GetAwaiter().GetResult();
+            if (client.Client.RemoteEndPoint is not IPEndPoint remote || !IPAddress.IsLoopback(remote.Address))
+                throw new UnauthorizedAccessException("Interactive keyboard helper connected from a non-loopback endpoint.");
+
+            using var stream = client.GetStream();
+            ConfigureTimeouts(stream);
+            WriteFrame(stream, new HelperWireRequest(token, action, request), MaxRequestBytes);
+            var envelope = ReadFrame<HelperEnvelope>(stream, MaxPayloadBytes);
             if (envelope.SessionId != checked((int)sessionId)) throw new InvalidDataException("Interactive keyboard helper did not execute in the sealed active console session.");
             if (!envelope.Success) throw new InvalidOperationException(envelope.Error ?? "Interactive keyboard helper failed.");
             if (envelope.Json is null) throw new InvalidDataException("Interactive keyboard helper returned no result payload.");
@@ -149,6 +168,7 @@ internal static class InteractiveDesktopKeyboardBridge
         }
         finally
         {
+            listener.Stop();
             if (processInfo.hProcess != IntPtr.Zero && WaitForSingleObject(processInfo.hProcess, 0) == WAIT_TIMEOUT)
             {
                 try { TerminateProcess(processInfo.hProcess, 1); } catch { }
@@ -247,24 +267,50 @@ internal static class InteractiveDesktopKeyboardBridge
         return new IntPtr(unchecked((long)value));
     }
 
-    private static HelperRequest DecodeRequest(string? encoded)
+    private static void ConfigureTimeouts(NetworkStream stream)
     {
-        if (string.IsNullOrWhiteSpace(encoded)) return new HelperRequest();
-        var bytes = Convert.FromBase64String(encoded);
-        if (bytes.Length > MaxRequestBytes) throw new InvalidDataException("Interactive keyboard helper request exceeded the bounded limit.");
-        return JsonSerializer.Deserialize<HelperRequest>(bytes) ?? new HelperRequest();
+        var timeoutMilliseconds = checked(HelperTimeoutSeconds * 1000);
+        stream.ReadTimeout = timeoutMilliseconds;
+        stream.WriteTimeout = timeoutMilliseconds;
     }
 
-    private static void ReadExactly(Stream stream, byte[] buffer, CancellationToken cancellationToken)
+    private static void WriteFrame<T>(Stream stream, T value, int maximumBytes)
+    {
+        var payload = JsonSerializer.SerializeToUtf8Bytes(value);
+        if (payload.Length <= 0 || payload.Length > maximumBytes) throw new InvalidDataException("Interactive keyboard helper frame exceeded the bounded limit.");
+        Span<byte> prefix = stackalloc byte[4];
+        BitConverter.TryWriteBytes(prefix, payload.Length);
+        stream.Write(prefix);
+        stream.Write(payload);
+        stream.Flush();
+    }
+
+    private static T ReadFrame<T>(Stream stream, int maximumBytes)
+    {
+        var prefix = new byte[4];
+        ReadExactly(stream, prefix);
+        var payloadLength = BitConverter.ToInt32(prefix, 0);
+        if (payloadLength <= 0 || payloadLength > maximumBytes) throw new InvalidDataException("Interactive keyboard helper returned an invalid frame length.");
+        var payload = new byte[payloadLength];
+        ReadExactly(stream, payload);
+        return JsonSerializer.Deserialize<T>(payload) ?? throw new InvalidDataException("Interactive keyboard helper returned an invalid frame payload.");
+    }
+
+    private static void ReadExactly(Stream stream, byte[] buffer)
     {
         var offset = 0;
         while (offset < buffer.Length)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             var read = stream.Read(buffer, offset, buffer.Length - offset);
-            if (read <= 0) throw new EndOfStreamException("Interactive keyboard helper pipe closed unexpectedly.");
+            if (read <= 0) throw new EndOfStreamException("Interactive keyboard helper connection closed unexpectedly.");
             offset += read;
         }
+    }
+
+    private static bool FixedTimeTokenEquals(string expected, string actual)
+    {
+        if (expected.Length != actual.Length) return false;
+        return CryptographicOperations.FixedTimeEquals(Encoding.ASCII.GetBytes(expected), Encoding.ASCII.GetBytes(actual));
     }
 
     private static void ValidateFixedDotnetHost()
