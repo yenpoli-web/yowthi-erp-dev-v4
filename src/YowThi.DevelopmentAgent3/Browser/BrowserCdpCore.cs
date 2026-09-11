@@ -528,6 +528,31 @@ internal static class ControlledChromeLauncher
     private struct PROCESS_INFORMATION { public IntPtr hProcess; public IntPtr hThread; public uint dwProcessId; public uint dwThreadId; }
 }
 
+internal static class BrowserFrameScript
+{
+    internal const int MaxDepth = 4;
+    internal const int MaxContexts = 32;
+
+    internal static string BuildContextPrelude() => """
+        const contexts = [];
+        const visit = (doc, win, depth) => {
+          if (!doc || !win || depth > 4 || contexts.length >= 32) return;
+          contexts.push({ doc, win });
+          if (depth >= 4) return;
+          const frames = Array.from(doc.querySelectorAll('iframe')).slice(0, 32);
+          for (const frame of frames) {
+            if (contexts.length >= 32) break;
+            try {
+              const childDoc = frame.contentDocument;
+              const childWin = frame.contentWindow;
+              if (childDoc && childWin) visit(childDoc, childWin, depth + 1);
+            } catch {}
+          }
+        };
+        visit(document, globalThis, 0);
+        """;
+}
+
 internal static class BrowserDomBridge
 {
     internal static async Task<BrowserDomQueryResult> QueryAsync(string tabId, string selector, int maxResults, CancellationToken cancellationToken = default)
@@ -540,16 +565,27 @@ internal static class BrowserDomBridge
             (() => {
               const selector = {{selectorJson}};
               const maxResults = {{maxResults}};
-              const all = Array.from(document.querySelectorAll(selector));
+              {{BrowserFrameScript.BuildContextPrelude()}}
+              const all = [];
+              let matchCount = 0;
+              for (const ctx of contexts) {
+                let matches = [];
+                try { matches = Array.from(ctx.doc.querySelectorAll(selector)); } catch { continue; }
+                matchCount += matches.length;
+                for (const el of matches) {
+                  if (all.length >= maxResults) break;
+                  all.push(el);
+                }
+              }
               const allowed = new Set(['id','class','name','role','aria-label','type','title','href']);
-              const elements = all.slice(0, maxResults).map((el, index) => {
+              const elements = all.map((el, index) => {
                 const attrs = {};
                 for (const a of Array.from(el.attributes || []).slice(0, 32)) if (allowed.has(a.name)) attrs[a.name] = String(a.value).slice(0, 2048);
                 const type = String(el.getAttribute?.('type') || '').toLowerCase();
                 const value = type === 'password' ? null : (typeof el.value === 'string' ? el.value.slice(0, 4096) : null);
                 return { index, tagName: String(el.tagName || ''), text: String(el.innerText || el.textContent || '').slice(0, 4096), value, attributes: attrs };
               });
-              return { matchCount: all.length, elements };
+              return { matchCount, elements };
             })()
             """;
         var value = await BrowserCdpClient.EvaluateAsync(tabId, expression, cancellationToken);
@@ -575,7 +611,13 @@ internal static class BrowserDomBridge
             (() => {
               const selector = {{selectorJson}};
               const expected = {{expectedMatchCount}};
-              const all = Array.from(document.querySelectorAll(selector));
+              {{BrowserFrameScript.BuildContextPrelude()}}
+              const all = [];
+              for (const ctx of contexts) {
+                let matches = [];
+                try { matches = Array.from(ctx.doc.querySelectorAll(selector)); } catch { continue; }
+                all.push(...matches);
+              }
               if (all.length !== expected) return { ok: false, count: all.length };
               const el = all[0];
               el.scrollIntoView({ block: 'center', inline: 'center' });
@@ -619,16 +661,24 @@ internal static class BrowserEditorBridge
         const string expression = """
             (() => {
               const out = [];
-              try {
-                if (globalThis.monaco?.editor?.getModelMarkers) {
-                  for (const m of globalThis.monaco.editor.getModelMarkers({}).slice(0, 100)) {
-                    out.push({ source: 'monaco', severity: String(m.severity ?? ''), message: String(m.message ?? '').slice(0,4096), startLine: m.startLineNumber ?? null, startColumn: m.startColumn ?? null, endLine: m.endLineNumber ?? null, endColumn: m.endColumn ?? null });
+              {{BrowserFrameScript.BuildContextPrelude()}}
+              for (const ctx of contexts) {
+                try {
+                  if (ctx.win.monaco?.editor?.getModelMarkers) {
+                    for (const m of ctx.win.monaco.editor.getModelMarkers({}).slice(0, 100 - out.length)) {
+                      out.push({ source: 'monaco', severity: String(m.severity ?? ''), message: String(m.message ?? '').slice(0,4096), startLine: m.startLineNumber ?? null, startColumn: m.startColumn ?? null, endLine: m.endLineNumber ?? null, endColumn: m.endColumn ?? null });
+                    }
                   }
-                }
-              } catch {}
-              for (const el of Array.from(document.querySelectorAll('[role="alert"], .error, .errors, .diagnostic, .diagnostics')).slice(0, 50)) {
-                const message = String(el.innerText || el.textContent || '').trim().slice(0,4096);
-                if (message) out.push({ source: 'dom', severity: 'unknown', message, startLine: null, startColumn: null, endLine: null, endColumn: null });
+                } catch {}
+                if (out.length >= 100) break;
+                try {
+                  for (const el of Array.from(ctx.doc.querySelectorAll('[role="alert"], .error, .errors, .diagnostic, .diagnostics')).slice(0, 50)) {
+                    const message = String(el.innerText || el.textContent || '').trim().slice(0,4096);
+                    if (message) out.push({ source: 'dom', severity: 'unknown', message, startLine: null, startColumn: null, endLine: null, endColumn: null });
+                    if (out.length >= 100) break;
+                  }
+                } catch {}
+                if (out.length >= 100) break;
               }
               return out.slice(0, 100);
             })()
@@ -684,46 +734,116 @@ internal static class BrowserEditorBridge
               const selector = {{selectorJson}};
               const replacement = {{textJson}};
               const mutate = {{mutateJs}};
-              const findElement = () => selector ? document.querySelector(selector) : null;
-              let el = findElement();
+              {{BrowserFrameScript.BuildContextPrelude()}}
 
-              try {
-                const cmRoot = el?.CodeMirror ? el : el?.closest?.('.CodeMirror');
-                const cm = cmRoot?.CodeMirror || document.querySelector('.CodeMirror')?.CodeMirror;
-                if (cm && typeof cm.getValue === 'function') {
-                  if (mutate) cm.setValue(replacement);
-                  return { ok: true, kind: 'codemirror5', text: String(cm.getValue()) };
+              const findSelected = () => {
+                if (!selector) return { el: null, ctx: null };
+                for (const ctx of contexts) {
+                  try {
+                    const candidate = ctx.doc.querySelector(selector);
+                    if (candidate) return { el: candidate, ctx };
+                  } catch {}
                 }
-              } catch {}
+                return { el: null, ctx: null };
+              };
+              let located = findSelected();
+              let el = located.el;
+              let elCtx = located.ctx;
 
-              try {
-                const models = globalThis.monaco?.editor?.getModels?.() || [];
-                if (models.length > 0 && (!selector || el?.closest?.('.monaco-editor') || el?.classList?.contains('monaco-editor'))) {
-                  const model = models[0];
-                  if (mutate) model.setValue(replacement);
-                  return { ok: true, kind: 'monaco', text: String(model.getValue()) };
+              for (const ctx of contexts) {
+                try {
+                  const selectedHere = el && el.ownerDocument === ctx.doc;
+                  const cmRoot = selectedHere ? (el.CodeMirror ? el : el.closest?.('.CodeMirror')) : null;
+                  const cm = cmRoot?.CodeMirror || (!selector ? ctx.doc.querySelector('.CodeMirror')?.CodeMirror : null);
+                  if (cm && typeof cm.getValue === 'function') {
+                    if (mutate) cm.setValue(replacement);
+                    return { ok: true, kind: 'codemirror5', text: String(cm.getValue()) };
+                  }
+                } catch {}
+              }
+
+              for (const ctx of contexts) {
+                try {
+                  const selectedHere = el && el.ownerDocument === ctx.doc;
+                  const roots = [];
+                  if (selectedHere) {
+                    roots.push(el);
+                    const nearestContent = el.closest?.('.cm-content');
+                    const nearestEditor = el.closest?.('.cm-editor');
+                    if (nearestContent) roots.push(nearestContent);
+                    if (nearestEditor) roots.push(nearestEditor);
+                  } else if (!selector) {
+                    const content = ctx.doc.querySelector('.cm-content');
+                    const editor = ctx.doc.querySelector('.cm-editor');
+                    if (content) roots.push(content);
+                    if (editor) roots.push(editor);
+                  }
+                  for (const root of roots) {
+                    const content = root.classList?.contains('cm-content') ? root : root.querySelector?.('.cm-content');
+                    const view = root.cmView?.view || content?.cmView?.view;
+                    if (view?.state?.doc && typeof view.dispatch === 'function') {
+                      if (mutate) {
+                        const currentLength = view.state.doc.length;
+                        view.dispatch({ changes: { from: 0, to: currentLength, insert: replacement } });
+                      }
+                      return { ok: true, kind: 'codemirror6', text: String(view.state.doc.toString()) };
+                    }
+                  }
+                } catch {}
+              }
+
+              for (const ctx of contexts) {
+                try {
+                  const models = ctx.win.monaco?.editor?.getModels?.() || [];
+                  const selectedHere = el && el.ownerDocument === ctx.doc;
+                  if (models.length > 0 && (!selector || (selectedHere && (el.closest?.('.monaco-editor') || el.classList?.contains('monaco-editor'))))) {
+                    const model = models[0];
+                    if (mutate) model.setValue(replacement);
+                    return { ok: true, kind: 'monaco', text: String(model.getValue()) };
+                  }
+                } catch {}
+              }
+
+              if (!el && !selector) {
+                for (const query of ['textarea', '[contenteditable="true"]', 'input[type="text"]']) {
+                  for (const ctx of contexts) {
+                    try {
+                      const candidate = ctx.doc.querySelector(query);
+                      if (candidate) { el = candidate; elCtx = ctx; break; }
+                    } catch {}
+                  }
+                  if (el) break;
                 }
-              } catch {}
+              }
 
-              if (!el && !selector) el = document.querySelector('textarea, input[type="text"], [contenteditable="true"]');
-              if (el instanceof HTMLTextAreaElement || (el instanceof HTMLInputElement && String(el.type).toLowerCase() !== 'password')) {
+              if (el?.classList?.contains('cm-content') || el?.closest?.('.cm-editor')) {
+                return { ok: false, error: 'CodeMirror 6 DOM was found but an exact editor-state bridge was unavailable.' };
+              }
+
+              const ownerWin = elCtx?.win || el?.ownerDocument?.defaultView || globalThis;
+              const tag = String(el?.tagName || '').toLowerCase();
+              const type = String(el?.getAttribute?.('type') || '').toLowerCase();
+              if (tag === 'textarea' || (tag === 'input' && type !== 'password')) {
                 if (mutate) {
-                  const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-                  const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+                  const proto = tag === 'textarea' ? ownerWin.HTMLTextAreaElement?.prototype : ownerWin.HTMLInputElement?.prototype;
+                  const setter = proto ? Object.getOwnPropertyDescriptor(proto, 'value')?.set : null;
                   if (setter) setter.call(el, replacement); else el.value = replacement;
-                  el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: null }));
-                  el.dispatchEvent(new Event('change', { bubbles: true }));
+                  const InputCtor = ownerWin.InputEvent || InputEvent;
+                  const EventCtor = ownerWin.Event || Event;
+                  el.dispatchEvent(new InputCtor('input', { bubbles: true, inputType: 'insertText', data: null }));
+                  el.dispatchEvent(new EventCtor('change', { bubbles: true }));
                 }
-                return { ok: true, kind: el instanceof HTMLTextAreaElement ? 'textarea' : 'input', text: String(el.value) };
+                return { ok: true, kind: tag === 'textarea' ? 'textarea' : 'input', text: String(el.value) };
               }
               if (el?.isContentEditable) {
                 if (mutate) {
                   el.textContent = replacement;
-                  el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: null }));
+                  const InputCtor = ownerWin.InputEvent || InputEvent;
+                  el.dispatchEvent(new InputCtor('input', { bubbles: true, inputType: 'insertText', data: null }));
                 }
                 return { ok: true, kind: 'contenteditable', text: String(el.innerText || el.textContent || '') };
               }
-              return { ok: false, error: selector ? 'Selector did not resolve to a supported editor model.' : 'No supported Monaco, CodeMirror 5, textarea, input, or contenteditable editor was found.' };
+              return { ok: false, error: selector ? 'Selector did not resolve to a supported editor model in the top document or a same-origin iframe.' : 'No supported Monaco, CodeMirror 5/6, textarea, input, or contenteditable editor was found in the top document or same-origin iframes.' };
             })()
             """;
     }
