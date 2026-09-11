@@ -55,38 +55,27 @@ internal static class InteractiveDesktopKeyboardBridge
         if (port is null || port <= 0 || port > 65535 || string.IsNullOrWhiteSpace(token))
             return Task.FromResult(true);
 
+        using var client = new TcpClient(AddressFamily.InterNetwork);
+        client.Connect(IPAddress.Loopback, port.Value);
+        using var stream = client.GetStream();
+        ConfigureTimeouts(stream);
+
         HelperEnvelope envelope;
         try
         {
-            using var client = new TcpClient(AddressFamily.InterNetwork);
-            client.Connect(IPAddress.Loopback, port.Value);
-            using var stream = client.GetStream();
-            ConfigureTimeouts(stream);
-
             var wire = ReadFrame<HelperWireRequest>(stream, MaxRequestBytes);
             if (!FixedTimeTokenEquals(token, wire.Token))
                 throw new UnauthorizedAccessException("Interactive keyboard helper token validation failed.");
 
             var result = ExecuteHelperAction(wire.Action, wire.Request);
             envelope = new HelperEnvelope(true, null, result, Environment.ProcessId, Process.GetCurrentProcess().SessionId);
-            WriteFrame(stream, envelope, MaxPayloadBytes);
         }
         catch (Exception ex)
         {
             envelope = new HelperEnvelope(false, SanitizeError(ex), null, Environment.ProcessId, Process.GetCurrentProcess().SessionId);
-            try
-            {
-                using var client = new TcpClient(AddressFamily.InterNetwork);
-                client.Connect(IPAddress.Loopback, port.Value);
-                using var stream = client.GetStream();
-                ConfigureTimeouts(stream);
-                WriteFrame(stream, envelope, MaxPayloadBytes);
-            }
-            catch
-            {
-            }
         }
 
+        WriteFrame(stream, envelope, MaxPayloadBytes);
         return Task.FromResult(true);
     }
 
