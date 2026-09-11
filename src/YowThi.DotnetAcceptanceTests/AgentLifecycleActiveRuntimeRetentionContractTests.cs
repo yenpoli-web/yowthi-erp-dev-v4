@@ -38,6 +38,9 @@ public sealed class AgentLifecycleActiveRuntimeRetentionContractTests
         Assert.Contains("Active runtime {name} DLL SHA-256 mismatch", source, StringComparison.Ordinal);
         Assert.Contains("FileAttributes.ReparsePoint", source, StringComparison.Ordinal);
         Assert.Contains("MaxActiveStateBytes", source, StringComparison.Ordinal);
+        Assert.Contains("TryGetPropertyIgnoreCase(root, \"schemaVersion\"", source, StringComparison.Ordinal);
+        Assert.Contains("GetRequiredPropertyIgnoreCase(element, \"runtimeDll\"", source, StringComparison.Ordinal);
+        Assert.Contains("StringComparison.OrdinalIgnoreCase", source, StringComparison.Ordinal);
     }
 
     [Fact]

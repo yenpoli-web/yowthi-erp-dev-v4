@@ -259,13 +259,13 @@ public static class AgentLifecycleRetentionCleanupTools
         var fingerprint = Convert.ToHexString(SHA256.HashData(bytes));
         using var doc = JsonDocument.Parse(bytes);
         var root = doc.RootElement;
-        if (!root.TryGetProperty("schemaVersion", out var schema) || schema.ValueKind != JsonValueKind.Number || schema.GetInt32() != 2)
+        if (!TryGetPropertyIgnoreCase(root, "schemaVersion", out var schema) || schema.ValueKind != JsonValueKind.Number || schema.GetInt32() != 2)
             throw new InvalidDataException("Active runtime state schemaVersion must be 2.");
-        if (!root.TryGetProperty("current", out var currentElement) || currentElement.ValueKind != JsonValueKind.Object)
+        if (!TryGetPropertyIgnoreCase(root, "current", out var currentElement) || currentElement.ValueKind != JsonValueKind.Object)
             throw new InvalidDataException("Active runtime state current slot is required.");
         var current = ReadActiveSlot(currentElement, "current");
         ActiveSlot? previous = null;
-        if (root.TryGetProperty("previous", out var previousElement) && previousElement.ValueKind != JsonValueKind.Null)
+        if (TryGetPropertyIgnoreCase(root, "previous", out var previousElement) && previousElement.ValueKind != JsonValueKind.Null)
         {
             if (previousElement.ValueKind != JsonValueKind.Object) throw new InvalidDataException("Active runtime state previous slot is invalid.");
             previous = ReadActiveSlot(previousElement, "previous");
@@ -275,8 +275,8 @@ public static class AgentLifecycleRetentionCleanupTools
 
     private static ActiveSlot ReadActiveSlot(JsonElement element, string name)
     {
-        var runtimeDllValue = element.GetProperty("runtimeDll").GetString() ?? throw new InvalidDataException($"Active runtime {name} runtimeDll is required.");
-        var runtimeSha = element.GetProperty("runtimeSha256").GetString() ?? throw new InvalidDataException($"Active runtime {name} runtimeSha256 is required.");
+        var runtimeDllValue = GetRequiredPropertyIgnoreCase(element, "runtimeDll").GetString() ?? throw new InvalidDataException($"Active runtime {name} runtimeDll is required.");
+        var runtimeSha = GetRequiredPropertyIgnoreCase(element, "runtimeSha256").GetString() ?? throw new InvalidDataException($"Active runtime {name} runtimeSha256 is required.");
         if (runtimeSha.Length != 64 || runtimeSha.Any(c => !Uri.IsHexDigit(c))) throw new InvalidDataException($"Active runtime {name} SHA-256 is invalid.");
         var runtimeDll = Path.GetFullPath(runtimeDllValue);
         if (!string.Equals(Path.GetFileName(runtimeDll), RuntimeFileName, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"Active runtime {name} DLL name is invalid.");
@@ -296,6 +296,22 @@ public static class AgentLifecycleRetentionCleanupTools
         return new(packagePath, runtimeSha.ToUpperInvariant());
     }
 
+    private static bool TryGetPropertyIgnoreCase(JsonElement element, string name, out JsonElement value)
+    {
+        foreach (var property in element.EnumerateObject())
+        {
+            if (!string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase)) continue;
+            value = property.Value;
+            return true;
+        }
+        value = default;
+        return false;
+    }
+
+    private static JsonElement GetRequiredPropertyIgnoreCase(JsonElement element, string name)
+        => TryGetPropertyIgnoreCase(element, name, out var value)
+            ? value
+            : throw new InvalidDataException($"Required active runtime property is missing: {name}");
     private static bool IsReferencedByRunningProcess(string packagePath)
     {
         var full = Path.GetFullPath(packagePath).TrimEnd('\\') + "\\";
