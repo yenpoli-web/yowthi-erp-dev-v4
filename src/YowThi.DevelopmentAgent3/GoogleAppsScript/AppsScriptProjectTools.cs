@@ -24,8 +24,34 @@ public static class AppsScriptProjectTools
     private static readonly ConcurrentDictionary<string, PendingPatchPayload> Payloads = new(StringComparer.Ordinal);
 
     [McpServerTool(Name = "apps_script_connector_status", ReadOnly = true, Destructive = false, OpenWorld = false)]
-    [Description("Read Google Apps Script connector configuration status without returning credential values. Authentication is loaded only from fixed Agent environment variables; OAuth tokens and client secrets are never accepted as tool arguments or returned.")]
+    [Description("Read Google Apps Script connector configuration status without returning credential values. Authentication may come from a fixed Agent environment configuration or a short-lived controlled-browser import; OAuth tokens and client secrets are never returned.")]
     public static AppsScriptConnectorStatusResult AppsScriptConnectorStatus() => Credentials.GetStatus();
+
+    [McpServerTool(Name = "apps_script_oauth_import_from_controlled_browser", ReadOnly = false, Destructive = false, OpenWorld = false)]
+    [Description("Import one short-lived Google OAuth access token from exactly one OAuth Playground page in the fixed Agent-controlled Chrome session at 127.0.0.1:9223. The token is read through a fixed internal CDP expression, retained only in Agent process memory until expiry or explicit clear, never accepted as a caller argument, never written to disk or audit, and never returned.")]
+    public static async Task<AppsScriptEphemeralCredentialResult> AppsScriptOAuthImportFromControlledBrowser(CancellationToken cancellationToken = default)
+    {
+        var browserToken = await AppsScriptControlledBrowserOAuthReader.ReadAsync(cancellationToken);
+        var result = AppsScriptEphemeralCredentialStore.Import(browserToken.AccessToken, browserToken.ExpiresInSeconds, browserToken.RequiredScopePresent);
+        Audit.Append("apps-script", "oauth-import", "controlled-oauth-playground", new
+        {
+            result.AuthMode,
+            result.Source,
+            result.ExpiresUtc,
+            result.TokenLength,
+            result.RequiredScopePresent
+        }, "executed");
+        return result;
+    }
+
+    [McpServerTool(Name = "apps_script_oauth_clear_ephemeral", ReadOnly = false, Destructive = false, OpenWorld = false)]
+    [Description("Clear only the short-lived in-memory Apps Script OAuth token previously imported from controlled Chrome. Fixed environment-based credentials are not changed, no credential value is returned, and no file, browser profile, service, registry, or external resource is modified.")]
+    public static AppsScriptEphemeralCredentialResult AppsScriptOAuthClearEphemeral()
+    {
+        var result = AppsScriptEphemeralCredentialStore.Clear();
+        Audit.Append("apps-script", "oauth-clear", "ephemeral-memory-token", new { result.AuthMode, result.Source }, "executed");
+        return result;
+    }
 
     [McpServerTool(Name = "apps_script_project_get", ReadOnly = true, Destructive = false, OpenWorld = true)]
     [Description("Read one Google Apps Script project's HEAD metadata and complete file sources through the fixed script.googleapis.com API. Returns a deterministic SHA-256 over file name/type/source plus advisory project updateTime. No browser, clipboard, desktop input, local staging file, or mutation is used.")]

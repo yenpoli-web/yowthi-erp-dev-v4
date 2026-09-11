@@ -107,6 +107,9 @@ public sealed class AppsScriptCredentialProvider
 
     public AppsScriptConnectorStatusResult GetStatus()
     {
+        if (AppsScriptEphemeralCredentialStore.TryGetAccessToken(out _))
+            return Status(true, "ephemeral-browser-token", Array.Empty<string>());
+
         var direct = Environment.GetEnvironmentVariable(AccessTokenEnvironmentVariable);
         if (!string.IsNullOrWhiteSpace(direct))
             return Status(true, "access-token", Array.Empty<string>());
@@ -123,6 +126,9 @@ public sealed class AppsScriptCredentialProvider
 
     public async Task<string> GetAccessTokenAsync(CancellationToken cancellationToken = default)
     {
+        if (AppsScriptEphemeralCredentialStore.TryGetAccessToken(out var ephemeral))
+            return ephemeral;
+
         var direct = Environment.GetEnvironmentVariable(AccessTokenEnvironmentVariable);
         if (!string.IsNullOrWhiteSpace(direct)) return ValidateToken(direct);
 

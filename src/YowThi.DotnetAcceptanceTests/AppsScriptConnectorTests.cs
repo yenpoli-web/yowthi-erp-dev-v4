@@ -118,6 +118,8 @@ public sealed class AppsScriptConnectorTests
             .Select(method => method.Name)
             .ToHashSet(StringComparer.Ordinal);
         Assert.Contains(nameof(AppsScriptProjectTools.AppsScriptConnectorStatus), methods);
+        Assert.Contains(nameof(AppsScriptProjectTools.AppsScriptOAuthImportFromControlledBrowser), methods);
+        Assert.Contains(nameof(AppsScriptProjectTools.AppsScriptOAuthClearEphemeral), methods);
         Assert.Contains(nameof(AppsScriptProjectTools.AppsScriptProjectGet), methods);
         Assert.Contains(nameof(AppsScriptProjectTools.AppsScriptProjectListFiles), methods);
         Assert.Contains(nameof(AppsScriptProjectTools.AppsScriptProjectVerify), methods);
@@ -127,6 +129,62 @@ public sealed class AppsScriptConnectorTests
         var execute = typeof(AppsScriptProjectTools).GetMethod(nameof(AppsScriptProjectTools.AppsScriptProjectPatchExecute))!;
         var callerParameters = execute.GetParameters().Where(parameter => parameter.ParameterType != typeof(CancellationToken)).Select(parameter => parameter.Name).ToArray();
         Assert.Equal(new[] { "planId", "approvalCode" }, callerParameters);
+
+        var import = typeof(AppsScriptProjectTools).GetMethod(nameof(AppsScriptProjectTools.AppsScriptOAuthImportFromControlledBrowser))!;
+        var importCallerParameters = import.GetParameters().Where(parameter => parameter.ParameterType != typeof(CancellationToken)).ToArray();
+        Assert.Empty(importCallerParameters);
+    }
+
+    [Fact]
+    public async Task CredentialProvider_UsesAndClearsEphemeralBrowserTokenWithoutPersistingIt()
+    {
+        var names = new[]
+        {
+            AppsScriptCredentialProvider.AccessTokenEnvironmentVariable,
+            AppsScriptCredentialProvider.RefreshTokenEnvironmentVariable,
+            AppsScriptCredentialProvider.ClientIdEnvironmentVariable,
+            AppsScriptCredentialProvider.ClientSecretEnvironmentVariable
+        };
+        var previous = names.ToDictionary(name => name, Environment.GetEnvironmentVariable, StringComparer.Ordinal);
+        AppsScriptEphemeralCredentialStore.Clear();
+        try
+        {
+            foreach (var name in names) Environment.SetEnvironmentVariable(name, null);
+            const string token = "test-ephemeral-browser-token-abcdefghijklmnopqrstuvwxyz";
+            var imported = AppsScriptEphemeralCredentialStore.Import(token, 600, true);
+            Assert.True(imported.Configured);
+            Assert.Equal("ephemeral-browser-token", imported.AuthMode);
+            Assert.Equal(token.Length, imported.TokenLength);
+
+            using var http = new HttpClient(new StubHandler(_ => throw new InvalidOperationException("Network should not be used for an active ephemeral token.")));
+            var provider = new AppsScriptCredentialProvider(http);
+            Assert.Equal("ephemeral-browser-token", provider.GetStatus().AuthMode);
+            Assert.Equal(token, await provider.GetAccessTokenAsync());
+
+            var cleared = AppsScriptEphemeralCredentialStore.Clear();
+            Assert.False(cleared.Configured);
+            Assert.Equal("unconfigured", provider.GetStatus().AuthMode);
+        }
+        finally
+        {
+            AppsScriptEphemeralCredentialStore.Clear();
+            foreach (var pair in previous) Environment.SetEnvironmentVariable(pair.Key, pair.Value);
+        }
+    }
+
+    [Fact]
+    public void EphemeralCredentialStore_RejectsMissingRequiredScope()
+    {
+        AppsScriptEphemeralCredentialStore.Clear();
+        try
+        {
+            Assert.Throws<UnauthorizedAccessException>(() => AppsScriptEphemeralCredentialStore.Import("test-ephemeral-browser-token-abcdefghijklmnopqrstuvwxyz", 600, false));
+            Assert.False(AppsScriptEphemeralCredentialStore.TryGetAccessToken(out _));
+        }
+        finally
+        {
+            AppsScriptEphemeralCredentialStore.Clear();
+        }
     }
 
     [Fact]
@@ -135,7 +193,7 @@ public sealed class AppsScriptConnectorTests
         using var http = new HttpClient(new StubHandler(_ => throw new InvalidOperationException("Network should not be used by status.")));
         var provider = new AppsScriptCredentialProvider(http);
         var status = provider.GetStatus();
-        Assert.Contains(status.AuthMode, new[] { "access-token", "refresh-token", "unconfigured" });
+        Assert.Contains(status.AuthMode, new[] { "ephemeral-browser-token", "access-token", "refresh-token", "unconfigured" });
         Assert.DoesNotContain("tokenValue", string.Join("|", status.MissingEnvironmentVariables), StringComparison.OrdinalIgnoreCase);
         Assert.Equal("https://script.googleapis.com/v1/projects/", status.ApiBase);
         Assert.Contains("no documented server-side ETag/If-Match", status.ConcurrencyModel, StringComparison.Ordinal);
