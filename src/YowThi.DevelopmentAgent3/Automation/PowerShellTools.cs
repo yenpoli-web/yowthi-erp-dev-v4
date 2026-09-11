@@ -20,11 +20,13 @@ public static class PowerShellTools
     private static readonly ProtectedPathPolicy Paths = new();
 
     private const string PowerShellExe = @"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe";
+    private const string GitExe = @"C:\Program Files\Git\cmd\git.exe";
+    private const string RepositoryRoot = @"C:\Dev\YowThi-ERP-Dev-v4";
     private const string AllowedScriptRoot = @"C:\Dev\YowThi-ERP-Dev-v4\automation\powershell";
     private const string FrozenProductionRoot = @"C:\yowthi-erp";
 
     [McpServerTool(Name = "powershell_script_plan", ReadOnly = false, Destructive = false, OpenWorld = false)]
-    [Description("Prepare a one-time signed high-risk plan to run one existing .ps1 file from the dedicated YowThi automation script root. Inline PowerShell commands are not accepted. The script SHA-256 is sealed into the plan and rechecked at execution. Obvious elevation and policy-bypass constructs are blocked. Arguments are signed and visible; do not use them for secrets.")]
+    [Description("Prepare a one-time signed high-risk plan to run one existing persistent Git-tracked .ps1 file from the dedicated YowThi automation script root. Untracked helper scripts are rejected; temporary helpers must use agent_scratch_script_plan so they remain outside the Git worktree. Inline PowerShell commands are not accepted. The script SHA-256 is sealed and obvious elevation/policy-bypass constructs are blocked.")]
     public static SignedPlan PowerShellScriptPlan(
         string scriptPath,
         string[]? arguments = null,
@@ -52,16 +54,16 @@ public static class PowerShellTools
             ["timeoutSeconds"] = timeoutSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)
         };
 
-        var summary = $"Run PowerShell script {script} (sha256={sha256[..12]}, arguments={args.Length}, timeout={timeoutSeconds}s)";
+        var summary = $"Run tracked PowerShell script {script} (sha256={sha256[..12]}, arguments={args.Length}, timeout={timeoutSeconds}s)";
         var unsigned = new SignedPlan(1, planId, approvalCode, "powershell", "powershell-script", script, parameters, RiskClass.High, summary, now, now.AddMinutes(10), string.Empty);
         var signed = unsigned with { Signature = Signer.Sign(unsigned) };
         Store.Add(signed);
-        Audit.Append(signed.Tool, signed.Operation, signed.Target, new { signed.PlanId, signed.RiskClass, signed.Summary, scriptSha256 = sha256, argumentCount = args.Length }, "prepared");
+        Audit.Append(signed.Tool, signed.Operation, signed.Target, new { signed.PlanId, signed.RiskClass, signed.Summary, scriptSha256 = sha256, argumentCount = args.Length, gitTracked = true }, "prepared");
         return signed;
     }
 
     [McpServerTool(Name = "powershell_script_execute", ReadOnly = false, Destructive = true, OpenWorld = false)]
-    [Description("Execute one previously prepared powershell/powershell-script plan. Only the sealed .ps1 file is executed; inline -Command and -EncodedCommand are not supported. The script SHA-256 and safety preflight are rechecked before execution. PowerShell runs non-interactively with no profile and RemoteSigned policy. This is a high-risk host automation capability and may modify the machine according to the reviewed script.")]
+    [Description("Execute one previously prepared powershell/powershell-script plan. The sealed .ps1 must still be a persistent Git-tracked file in the dedicated automation root; untracked scratch helpers are rejected. Script SHA-256 and safety preflight are rechecked. PowerShell runs non-interactively with no profile and RemoteSigned policy.")]
     public static async Task<PowerShellExecutionResult> PowerShellScriptExecute(
         string planId,
         string approvalCode,
@@ -142,7 +144,7 @@ public static class PowerShellTools
                 DateTimeOffset.UtcNow);
 
             Audit.Append(plan.Tool, plan.Operation, plan.Target,
-                new { plan.PlanId, process.ExitCode, scriptSha256 = actualSha256, argumentCount = args.Length },
+                new { plan.PlanId, process.ExitCode, scriptSha256 = actualSha256, argumentCount = args.Length, gitTracked = true },
                 process.ExitCode == 0 ? "executed" : "failed");
             return result;
         }
@@ -170,7 +172,50 @@ public static class PowerShellTools
             throw new FileNotFoundException("PowerShell script does not exist.", full);
         if ((File.GetAttributes(full) & FileAttributes.ReparsePoint) != 0)
             throw new UnauthorizedAccessException("Reparse-point PowerShell scripts are not allowed.");
+        RequireGitTrackedScript(full);
         return full;
+    }
+
+    private static void RequireGitTrackedScript(string fullPath)
+    {
+        if (!File.Exists(GitExe)) throw new FileNotFoundException("Fixed git.exe not found.", GitExe);
+        if ((File.GetAttributes(GitExe) & FileAttributes.ReparsePoint) != 0) throw new UnauthorizedAccessException("Fixed git.exe may not be a reparse point.");
+        var repository = Path.GetFullPath(RepositoryRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (!IsSameOrChild(fullPath, repository)) throw new UnauthorizedAccessException("Persistent PowerShell script is outside the fixed V4 repository.");
+        var relative = Path.GetRelativePath(repository, fullPath).Replace('\\', '/');
+        if (relative.StartsWith("../", StringComparison.Ordinal) || relative == "..") throw new UnauthorizedAccessException("Persistent PowerShell script escaped the fixed repository.");
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = GitExe,
+            WorkingDirectory = repository,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8
+        };
+        psi.Environment["GIT_TERMINAL_PROMPT"] = "0";
+        psi.Environment["GIT_PAGER"] = "cat";
+        psi.ArgumentList.Add("--no-pager");
+        psi.ArgumentList.Add("-c"); psi.ArgumentList.Add("core.hooksPath=NUL");
+        psi.ArgumentList.Add("-c"); psi.ArgumentList.Add("core.fsmonitor=false");
+        psi.ArgumentList.Add("-c"); psi.ArgumentList.Add($"safe.directory={repository}");
+        psi.ArgumentList.Add("-C"); psi.ArgumentList.Add(repository);
+        psi.ArgumentList.Add("ls-files");
+        psi.ArgumentList.Add("--error-unmatch");
+        psi.ArgumentList.Add("--");
+        psi.ArgumentList.Add(relative);
+
+        using var process = Process.Start(psi) ?? throw new InvalidOperationException("git.exe failed to start for tracked-script validation.");
+        if (!process.WaitForExit(5000))
+        {
+            try { process.Kill(entireProcessTree: true); } catch { }
+            throw new TimeoutException("git.exe tracked-script validation exceeded 5 seconds.");
+        }
+        if (process.ExitCode != 0)
+            throw new UnauthorizedAccessException("PowerShell helper is not Git-tracked. Temporary helpers must use agent_scratch_script_plan.");
     }
 
     private static string ValidateWorkingDirectory(string? workingDirectory, string scriptPath)

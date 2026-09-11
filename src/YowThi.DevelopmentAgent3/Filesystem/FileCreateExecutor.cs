@@ -1,5 +1,6 @@
-﻿using System.Text;
+using System.Text;
 using YowThi.DevelopmentAgent3.Core;
+using YowThi.DevelopmentAgent3.Scratch;
 using YowThi.DevelopmentAgent3.Security;
 
 namespace YowThi.DevelopmentAgent3.Filesystem;
@@ -18,7 +19,8 @@ public sealed class FileCreateExecutor : ITypedExecutor
         if (!string.Equals(plan.Tool, Tool, StringComparison.Ordinal) || !string.Equals(plan.Operation, Operation, StringComparison.Ordinal))
             throw new InvalidOperationException("Plan is not for filesystem/file-create.");
 
-        var target = _paths.RequireMutable(plan.Target);
+        var policyTarget = AgentScratchStore.RequireGenericFileCreationAllowed(plan.Target);
+        var target = _paths.RequireMutable(policyTarget);
         if (File.Exists(target)) throw new IOException($"Target already exists: {target}");
         if (!plan.Parameters.TryGetValue("contentBase64", out var contentBase64))
             throw new InvalidDataException("contentBase64 parameter is required.");

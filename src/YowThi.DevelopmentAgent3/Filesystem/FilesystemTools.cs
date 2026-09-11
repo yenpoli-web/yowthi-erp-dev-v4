@@ -1,9 +1,10 @@
-﻿using System.ComponentModel;
+using System.ComponentModel;
 using System.Security.Cryptography;
 using System.Text;
 using ModelContextProtocol.Server;
 using YowThi.DevelopmentAgent3.Audit;
 using YowThi.DevelopmentAgent3.Core;
+using YowThi.DevelopmentAgent3.Scratch;
 using YowThi.DevelopmentAgent3.Security;
 
 namespace YowThi.DevelopmentAgent3.Filesystem;
@@ -29,10 +30,11 @@ public static class FilesystemTools
     }
 
     [McpServerTool(Name="file_create_plan", ReadOnly=false, Destructive=false, OpenWorld=false)]
-    [Description("Prepare a one-time signed plan to create one file using the native .NET filesystem API. No shell command is generated or stored.")]
+    [Description("Prepare a one-time signed plan to create one file using the native .NET filesystem API. Generic creation of .ps1 helpers or Agent .yowthi-* scratch/backup artifacts inside the protected V4 Git worktree is rejected; use the repo-external Agent scratch capability for temporary helpers. No shell command is generated or stored.")]
     public static SignedPlan FileCreatePlan(string path, string content)
     {
-        var target = Paths.RequireMutable(path);
+        var policyTarget = AgentScratchStore.RequireGenericFileCreationAllowed(path);
+        var target = Paths.RequireMutable(policyTarget);
         var now = DateTimeOffset.UtcNow;
         var planId = Guid.NewGuid().ToString("N");
         var approvalCode = Convert.ToHexString(RandomNumberGenerator.GetBytes(6));
@@ -48,7 +50,7 @@ public static class FilesystemTools
     }
 
     [McpServerTool(Name="file_create_execute", ReadOnly=false, Destructive=false, OpenWorld=false)]
-    [Description("Execute one previously prepared filesystem/file-create plan using the native .NET filesystem API. The caller must repeat the signed operation, target, summary, and risk class so execution intent is explicit. No PowerShell, cmd, or generic command executor is used.")]
+    [Description("Execute one previously prepared filesystem/file-create plan using the native .NET filesystem API. V4 worktree scratch-script and .yowthi-* artifact restrictions are revalidated immediately before write. The caller must repeat the signed operation, target, summary, and risk class. No PowerShell, cmd, or generic command executor is used.")]
     public static async Task<ExecutionResult> FileCreateExecute(
         string planId,
         string approvalCode,

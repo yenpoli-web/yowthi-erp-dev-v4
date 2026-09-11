@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using ModelContextProtocol.Server;
+using YowThi.DevelopmentAgent3.Scratch;
 
 namespace YowThi.DevelopmentAgent3.Git;
 
@@ -13,13 +14,14 @@ public static class GitWorktreePreflightTools
     private const string DevelopmentRoot = @"C:\Dev";
     private const int MaximumStatusEntries = 500;
 
-    [McpServerTool(Name = "git_worktree_mutation_preflight", ReadOnly = true, Destructive = false, OpenWorld = false)]
-    [Description("Perform a repository-wide read-only mutation preflight for one Git worktree under C:\\Dev. Enumerates every linked worktree, active branch, HEAD, locked/prunable state, and bounded tracked/untracked status using fixed git.exe commands. The result blocks eligibility when the requested worktree is dirty, the intended branch is active elsewhere, any worktree is unsafe, or—by default—any worktree is dirty. No files, refs, index, worktree metadata, branches, remotes, hooks, or processes are modified.")]
+    [McpServerTool(Name = "git_worktree_mutation_preflight", ReadOnly = false, Destructive = true, OpenWorld = false)]
+    [Description("Perform a repository-wide mutation preflight for one Git worktree under C:\\Dev. Before Git status inspection, it reconciles only expired Agent-owned artifacts in the fixed repo-external scratch vault after manifest/SHA/TTL validation and returns that reconciliation evidence; invalid scratch manifests block eligibility. It then enumerates every linked worktree, active branch, HEAD, locked/prunable state, and bounded tracked/untracked status using fixed git.exe commands. No Git files, refs, index, worktree metadata, branches, remotes, hooks, or processes are modified.")]
     public static async Task<GitWorktreeMutationPreflightResult> GitWorktreeMutationPreflight(
         string repository,
         string? intendedBranch = null,
         bool requireAllWorktreesClean = true)
     {
+        var scratchReconciliation = AgentScratchStore.ReconcileExpired();
         var repositoryPath = ValidatePath(repository, requireRepositoryRoot: false);
         var gitSha256 = GetFileSha256(GitExe);
         var requestedTop = NormalizePath((await RunGitAsync(repositoryPath, new[] { "rev-parse", "--show-toplevel" }, 30)).StdOut.Trim());
@@ -35,6 +37,8 @@ public static class GitWorktreePreflightTools
         var parsed = ParseWorktrees(porcelain);
         var worktrees = new List<GitWorktreePreflightEntry>();
         var reasons = new List<string>();
+        if (scratchReconciliation.InvalidManifestCount > 0)
+            reasons.Add($"Agent scratch reconciliation found {scratchReconciliation.InvalidManifestCount} invalid manifest(s); Git mutation is blocked until scratch ownership/integrity is resolved.");
 
         foreach (var item in parsed)
         {
@@ -138,6 +142,7 @@ public static class GitWorktreePreflightTools
             distinctReasons.Length == 0,
             distinctReasons,
             worktrees,
+            scratchReconciliation,
             gitSha256,
             DateTimeOffset.UtcNow);
     }
@@ -299,5 +304,6 @@ public sealed record GitWorktreeMutationPreflightResult(
     bool EligibleForMutation,
     IReadOnlyList<string> BlockingReasons,
     IReadOnlyList<GitWorktreePreflightEntry> Worktrees,
+    AgentScratchReconcileResult ScratchReconciliation,
     string GitExeSha256,
     DateTimeOffset CheckedUtc);
