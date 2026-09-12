@@ -2,6 +2,7 @@ using ModelContextProtocol.AspNetCore;
 using ModelContextProtocol.Server;
 using YowThi.DevelopmentAgent3.Runtime;
 using YowThi.DevelopmentAgent3.Security;
+using YowThi.DevelopmentAgent3.Transfer;
 
 YowThi.DevelopmentAgent3.Windows.DesktopDpiAwareness.EnableForInteractiveHelper(args);
 if (await YowThi.DevelopmentAgent3.Windows.InteractiveDesktopCaptureTools.TryRunHelperAsync(args))
@@ -10,6 +11,8 @@ if (await YowThi.DevelopmentAgent3.Windows.InteractiveDesktopKeyboardBridge.TryR
     return;
 if (await YowThi.DevelopmentAgent3.Windows.InteractiveDesktopSessionBridge.TryRunHelperAsync(args))
     return;
+
+TransferStagingBootstrap.EnsureExists();
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Host.UseWindowsService(options => options.ServiceName = "YowThi Development Agent 3");
