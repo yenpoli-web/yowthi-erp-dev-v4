@@ -20,7 +20,18 @@ internal static class Program
 
     public static int Main(string[] args)
     {
-        if (!OperatingSystem.IsWindows() || args.Length != 1) return 90;
+        if (!OperatingSystem.IsWindows()) return 90;
+        if (args.Length == 1 && string.Equals(args[0], "--bootstrap-p54", StringComparison.Ordinal))
+            return IndependentBootstrap.BootstrapP54();
+        if (args.Length == 4 && string.Equals(args[0], "--service", StringComparison.Ordinal))
+            return IndependentBootstrap.RunOneShotService(args[1], args[2], args[3]);
+        if (args.Length == 1)
+            return RunUpdate(args);
+        return 90;
+    }
+
+    internal static int RunUpdate(string[] args)
+    {
         string? requestPath = null, updateId = null, backupDirectory = null, nextDirectory = null;
         var oldMoved = false;
         var newMoved = false;

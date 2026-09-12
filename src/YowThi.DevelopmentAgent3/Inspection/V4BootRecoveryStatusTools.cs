@@ -15,7 +15,7 @@ public static class V4BootRecoveryStatusTools
     private const string SupervisorServiceName = "YowThiV4RuntimeSupervisor";
     private const string SupervisorExe = @"C:\Dev\YowThi-ERP-Dev-v4\runtime-supervisor\current\YowThi.RuntimeSupervisor.exe";
     private const string SupervisorDll = @"C:\Dev\YowThi-ERP-Dev-v4\runtime-supervisor\current\YowThi.RuntimeSupervisor.dll";
-    private const string ExpectedSupervisorDllSha256 = "6ADB4841E9398D82AB7A4AAEBF3251EF77671F05401BE11A213640B0465156D2";
+    private const string ExpectedSupervisorDllSha256 = "26B0963B582C613C8E46C8D7BFAA2C6D32109EFE48569C31F5C67AF8EEA59B6F";
 
     private const string BootstrapBackendServiceName = "YowThiDevelopmentAgent";
     private const string BootstrapBackendExe = @"C:\Program Files\YowThi\DevelopmentAgent\YowThi.DevelopmentAgent.exe";
@@ -64,7 +64,7 @@ public static class V4BootRecoveryStatusTools
         {
             supervisorDllSha256 = HashRegularFile(SupervisorDll);
             if (!string.Equals(supervisorDllSha256, ExpectedSupervisorDllSha256, StringComparison.OrdinalIgnoreCase))
-                failures.Add("Supervisor DLL SHA-256 does not match the accepted P12 runtime-handoff activation build.");
+                failures.Add("Supervisor DLL SHA-256 does not match the accepted P54 deployment-recovery build.");
         }
         catch (Exception ex)
         {
