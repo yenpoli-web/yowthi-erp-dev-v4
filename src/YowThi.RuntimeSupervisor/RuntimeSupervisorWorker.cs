@@ -33,42 +33,47 @@ public sealed class RuntimeSupervisorWorker(ILogger<RuntimeSupervisorWorker> log
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _active = await LoadOrImportActiveStateAsync(stoppingToken);
-        if (_active is not null)
+        try
         {
-            await EnsureActiveRuntimeAsync(stoppingToken);
-            await EnsureTunnelAsync(stoppingToken);
-        }
-
-        while (!stoppingToken.IsCancellationRequested)
-        {
-            try
+            _active = await LoadOrImportActiveStateAsync(stoppingToken);
+            if (_active is not null)
             {
-                if (_active is not null)
+                await EnsureActiveRuntimeAsync(stoppingToken);
+                await EnsureTunnelAsync(stoppingToken);
+            }
+
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                try
                 {
-                    if (!await IsHealthyAsync(_active.Current, stoppingToken))
-                        await EnsureActiveRuntimeAsync(stoppingToken);
+                    if (_active is not null)
+                    {
+                        if (!await IsHealthyAsync(_active.Current, stoppingToken))
+                            await EnsureActiveRuntimeAsync(stoppingToken);
 
-                    if (await IsHealthyAsync(_active.Current, stoppingToken))
-                        await EnsureTunnelAsync(stoppingToken);
+                        if (await IsHealthyAsync(_active.Current, stoppingToken))
+                            await EnsureTunnelAsync(stoppingToken);
+                    }
                 }
-            }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Runtime supervisor iteration failed.");
-            }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Runtime supervisor iteration failed.");
+                }
 
-            try { await Task.Delay(1000, stoppingToken); }
-            catch (OperationCanceledException) { break; }
+                try { await Task.Delay(1000, stoppingToken); }
+                catch (OperationCanceledException) { break; }
+            }
         }
-
-        StopOwnedTunnel();
-        StopOwnedRuntime();
-        _http.Dispose();
+        finally
+        {
+            StopOwnedTunnel();
+            StopOwnedRuntime();
+            _http.Dispose();
+        }
     }
 
     private async Task<ActiveState?> LoadOrImportActiveStateAsync(CancellationToken token)

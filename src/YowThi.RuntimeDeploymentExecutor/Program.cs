@@ -121,9 +121,12 @@ internal static class Program
             if (!await WaitForExactRuntimeShaAsync(authorization.HealthUrl, authorization.TargetRuntimeSha256, TimeSpan.FromSeconds(45)))
                 throw new InvalidOperationException("Target runtime failed exact SHA-256 health validation after Supervisor restart.");
 
-            var activeAfter = ReadActiveState();
-            if (!EqualsSha(activeAfter.Current.RuntimeSha256, authorization.TargetRuntimeSha256) || activeAfter.Current.ProcessId <= 0)
-                throw new InvalidOperationException("Active runtime read-back does not prove target deployment.");
+            var activeAfter = await WaitForActiveRuntimeStateAsync(
+                authorization.TargetRuntimeDll,
+                authorization.TargetRuntimeSha256,
+                TimeSpan.FromSeconds(15));
+            if (activeAfter is null)
+                throw new InvalidOperationException("Active runtime read-back does not prove target deployment within the bounded wait.");
 
             WriteTerminalResult(CompletedRoot, authorization.AuthorizationId, new
             {
@@ -347,6 +350,28 @@ internal static class Program
             await Task.Delay(500);
         }
         return false;
+    }
+
+    private static async Task<ActiveState?> WaitForActiveRuntimeStateAsync(string expectedRuntimeDll, string expectedSha, TimeSpan timeout)
+    {
+        var expectedPath = Path.GetFullPath(expectedRuntimeDll);
+        var deadline = DateTimeOffset.UtcNow + timeout;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            try
+            {
+                var state = ReadActiveState();
+                if (state.Current.ProcessId > 0 &&
+                    EqualsSha(state.Current.RuntimeSha256, expectedSha) &&
+                    string.Equals(Path.GetFullPath(state.Current.RuntimeDll), expectedPath, StringComparison.OrdinalIgnoreCase))
+                    return state;
+            }
+            catch (IOException) { }
+            catch (JsonException) { }
+
+            await Task.Delay(100);
+        }
+        return null;
     }
 
     private static async Task<bool> WaitForProcessExitAsync(int processId, TimeSpan timeout)
