@@ -21,6 +21,9 @@ public static class V4BootRecoveryStatusTools
     private const string BootstrapBackendExe = @"C:\Program Files\YowThi\DevelopmentAgent\YowThi.DevelopmentAgent.exe";
 
     private const string ActiveStatePath = @"C:\Dev\YowThi-ERP-Dev-v4\.agent3-handoff\active-runtime.json";
+    private const string TransferRoot = @"C:\Dev\YowThi-ERP-Dev-v4\staging\transfer";
+    private const string TransferInboxRoot = @"C:\Dev\YowThi-ERP-Dev-v4\staging\transfer\inbox";
+    private const string TransferOutboxRoot = @"C:\Dev\YowThi-ERP-Dev-v4\staging\transfer\outbox";
 
     private const string TunnelExe = @"C:\ProgramData\YowThi\TunnelClient\bin\tunnel-client.exe";
     private const string ExpectedTunnelExeSha256 = "6649169733686805CA16CCCD91774594D0C017FD729C37AD4CE1CD18323D9AE8";
@@ -38,7 +41,7 @@ public static class V4BootRecoveryStatusTools
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 
     [McpServerTool(Name = "v4_boot_recovery_status", ReadOnly = true, Destructive = false, OpenWorld = false)]
-    [Description("Read the complete YowThi ERP Dev v4 reboot-recovery acceptance state in one call. It verifies the Automatic LocalSystem Runtime Supervisor, the Automatic Bootstrap backend, active Agent runtime identity, loopback 8828 and 8787 listeners, Formal 8792 and Bootstrap 8793 tunnels with supervisor parent ownership, fixed supervisor/tunnel/profile fingerprints, and reboot ownership ordering. Returns accepted plus explicit failure reasons. This is read-only and does not start, stop, restart, mutate, repair, read secrets, execute shells, or access production paths.")]
+    [Description("Read the complete YowThi ERP Dev v4 reboot-recovery acceptance state in one call. It verifies the Automatic LocalSystem Runtime Supervisor, the Automatic Bootstrap backend, active Agent runtime identity, loopback 8828 and 8787 listeners, Formal 8792 and Bootstrap 8793 tunnels with supervisor parent ownership, fixed supervisor/tunnel/profile fingerprints, fixed transfer staging queues, and reboot ownership ordering. Returns accepted plus explicit failure reasons. This is read-only and does not start, stop, restart, mutate, repair, read secrets, execute shells, or access production paths.")]
     public static V4BootRecoveryStatusResult V4BootRecoveryStatus()
     {
         var failures = new List<string>();
@@ -88,6 +91,8 @@ public static class V4BootRecoveryStatusTools
             if (!registry.ToolNames.Contains(required, StringComparer.Ordinal))
                 failures.Add("Required Agent tool is missing from the authoritative registry: " + required);
         }
+
+        var transferStaging = ReadTransferStagingStatus(failures);
 
         ActiveState? active = null;
         try
@@ -205,6 +210,7 @@ public static class V4BootRecoveryStatusTools
             bootstrapBackendService,
             supervisorDllSha256,
             registry,
+            transferStaging,
             active,
             runtimeListener,
             bootstrapBackendListener,
@@ -220,6 +226,38 @@ public static class V4BootRecoveryStatusTools
             runtimeStartUtc,
             formalTunnelStartUtc,
             bootstrapTunnelStartUtc);
+    }
+
+    private static TransferStagingStatus ReadTransferStagingStatus(List<string> failures)
+    {
+        var root = ReadTransferDirectoryStatus(TransferRoot, "Transfer staging root", failures);
+        var inbox = ReadTransferDirectoryStatus(TransferInboxRoot, "Transfer inbox", failures);
+        var outbox = ReadTransferDirectoryStatus(TransferOutboxRoot, "Transfer outbox", failures);
+        return new TransferStagingStatus(root, inbox, outbox);
+    }
+
+    private static TransferDirectoryStatus ReadTransferDirectoryStatus(string path, string label, List<string> failures)
+    {
+        try
+        {
+            var full = Path.GetFullPath(path);
+            if (!Directory.Exists(full))
+            {
+                failures.Add($"{label} does not exist: {full}");
+                return new(full, false, false);
+            }
+
+            var attributes = File.GetAttributes(full);
+            var isReparsePoint = (attributes & FileAttributes.ReparsePoint) != 0;
+            if (isReparsePoint)
+                failures.Add($"{label} may not be a reparse point: {full}");
+            return new(full, true, isReparsePoint);
+        }
+        catch (Exception ex)
+        {
+            failures.Add($"{label} verification failed: {FormatError(ex)}");
+            return new(Path.GetFullPath(path), false, false);
+        }
     }
 
     private static ServiceStatusResult? ReadAndValidateService(
@@ -388,6 +426,8 @@ public static class V4BootRecoveryStatusTools
         public IntPtr InheritedFromUniqueProcessId;
     }
 
+    public sealed record TransferDirectoryStatus(string Path, bool Exists, bool IsReparsePoint);
+    public sealed record TransferStagingStatus(TransferDirectoryStatus Root, TransferDirectoryStatus Inbox, TransferDirectoryStatus Outbox);
     public sealed record RuntimeSlot(string? PlanId, string RuntimeDll, string RuntimeSha256, string ListenUrl, string HealthUrl, int ProcessId);
     public sealed record ActiveState(int SchemaVersion, RuntimeSlot Current, RuntimeSlot? Previous, DateTimeOffset UpdatedUtc);
 }
@@ -401,6 +441,7 @@ public sealed record V4BootRecoveryStatusResult(
     ServiceStatusResult? BootstrapBackendService,
     string? SupervisorDllSha256,
     ToolRegistrySnapshot ToolRegistry,
+    V4BootRecoveryStatusTools.TransferStagingStatus TransferStaging,
     V4BootRecoveryStatusTools.ActiveState? ActiveRuntime,
     TcpListenerItem? RuntimeListener,
     TcpListenerItem? BootstrapBackendListener,
