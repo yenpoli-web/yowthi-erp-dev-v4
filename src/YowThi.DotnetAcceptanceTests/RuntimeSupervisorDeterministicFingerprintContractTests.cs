@@ -23,6 +23,18 @@ public sealed class RuntimeSupervisorDeterministicFingerprintContractTests
             StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void SupervisorProject_DisablesSourceControlQueriesAndSourceLink()
+    {
+        var project = ReadSupervisorProject();
+
+        Assert.Contains(
+            "<EnableSourceControlManagerQueries>false</EnableSourceControlManagerQueries>",
+            project,
+            StringComparison.Ordinal);
+        Assert.Contains("<EnableSourceLink>false</EnableSourceLink>", project, StringComparison.Ordinal);
+    }
+
     private static string ReadSupervisorProject()
     {
         var path = Path.GetFullPath(Path.Combine(
