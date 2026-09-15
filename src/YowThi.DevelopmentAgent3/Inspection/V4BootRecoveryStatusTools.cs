@@ -20,6 +20,7 @@ public static class V4BootRecoveryStatusTools
     private const string BootstrapBackendServiceName = "YowThiDevelopmentAgent";
     private const string BootstrapBackendExe = @"C:\Program Files\YowThi\DevelopmentAgent\YowThi.DevelopmentAgent.exe";
 
+    private const string DevRoot = @"C:\Dev\YowThi-ERP-Dev-v4";
     private const string ActiveStatePath = @"C:\Dev\YowThi-ERP-Dev-v4\.agent3-handoff\active-runtime.json";
     private const string TransferRoot = @"C:\Dev\YowThi-ERP-Dev-v4\staging\transfer";
     private const string TransferInboxRoot = @"C:\Dev\YowThi-ERP-Dev-v4\staging\transfer\inbox";
@@ -244,22 +245,49 @@ public static class V4BootRecoveryStatusTools
             if (!Directory.Exists(full))
             {
                 failures.Add($"{label} does not exist: {full}");
-                return new(full, false, false);
+                return new(full, false, false, false);
             }
 
             var attributes = File.GetAttributes(full);
             var isReparsePoint = (attributes & FileAttributes.ReparsePoint) != 0;
+            var traversalSafe = ValidateTransferTraversal(full, out var unsafePath);
             if (isReparsePoint)
                 failures.Add($"{label} may not be a reparse point: {full}");
-            return new(full, true, isReparsePoint);
+            else if (!traversalSafe)
+                failures.Add($"{label} traverses a reparse point or escapes the fixed development root: {unsafePath ?? full}");
+            return new(full, true, isReparsePoint, traversalSafe);
         }
         catch (Exception ex)
         {
             failures.Add($"{label} verification failed: {FormatError(ex)}");
-            return new(Path.GetFullPath(path), false, false);
+            return new(Path.GetFullPath(path), false, false, false);
         }
     }
 
+    private static bool ValidateTransferTraversal(string path, out string? unsafePath)
+    {
+        var devRoot = Path.GetFullPath(DevRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var current = new DirectoryInfo(Path.GetFullPath(path));
+        while (current is not null)
+        {
+            if ((current.Attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                unsafePath = current.FullName;
+                return false;
+            }
+
+            if (string.Equals(current.FullName.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), devRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                unsafePath = null;
+                return true;
+            }
+
+            current = current.Parent;
+        }
+
+        unsafePath = path;
+        return false;
+    }
     private static ServiceStatusResult? ReadAndValidateService(
         string serviceName,
         string expectedExecutable,
@@ -426,7 +454,7 @@ public static class V4BootRecoveryStatusTools
         public IntPtr InheritedFromUniqueProcessId;
     }
 
-    public sealed record TransferDirectoryStatus(string Path, bool Exists, bool IsReparsePoint);
+    public sealed record TransferDirectoryStatus(string Path, bool Exists, bool IsReparsePoint, bool TraversalSafe);
     public sealed record TransferStagingStatus(TransferDirectoryStatus Root, TransferDirectoryStatus Inbox, TransferDirectoryStatus Outbox);
     public sealed record RuntimeSlot(string? PlanId, string RuntimeDll, string RuntimeSha256, string ListenUrl, string HealthUrl, int ProcessId);
     public sealed record ActiveState(int SchemaVersion, RuntimeSlot Current, RuntimeSlot? Previous, DateTimeOffset UpdatedUtc);
