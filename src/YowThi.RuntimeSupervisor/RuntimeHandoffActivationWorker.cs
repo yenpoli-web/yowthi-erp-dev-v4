@@ -10,6 +10,7 @@ public sealed class RuntimeHandoffActivationWorker(ILogger<RuntimeHandoffActivat
 {
     private const string DevRoot = @"C:\Dev\YowThi-ERP-Dev-v4";
     private const string ReleaseRoot = DevRoot + @"\acceptance\agent-lifecycle\releases";
+    private const string HandoffRoot = DevRoot + @"\.agent3-handoff";
     private const string PendingRoot = DevRoot + @"\.agent3-handoff\pending";
     private const string ReadyRoot = DevRoot + @"\.agent3-handoff\ready";
     private const string ActiveStatePath = DevRoot + @"\.agent3-handoff\active-runtime.json";
@@ -19,13 +20,19 @@ public sealed class RuntimeHandoffActivationWorker(ILogger<RuntimeHandoffActivat
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        RuntimeSupervisorPathSafety.RequireSafeDirectoryTraversal(HandoffRoot, DevRoot);
         Directory.CreateDirectory(PendingRoot);
         Directory.CreateDirectory(ReadyRoot);
+        RuntimeSupervisorPathSafety.RequireSafeDirectoryTraversal(PendingRoot, HandoffRoot);
+        RuntimeSupervisorPathSafety.RequireSafeDirectoryTraversal(ReadyRoot, HandoffRoot);
 
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
+                RuntimeSupervisorPathSafety.RequireSafeDirectoryTraversal(HandoffRoot, DevRoot);
+                RuntimeSupervisorPathSafety.RequireSafeDirectoryTraversal(PendingRoot, HandoffRoot);
+                RuntimeSupervisorPathSafety.RequireSafeDirectoryTraversal(ReadyRoot, HandoffRoot);
                 var authorizationPath = Directory.EnumerateFiles(ReadyRoot, "*.json", SearchOption.TopDirectoryOnly)
                     .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
                     .FirstOrDefault();
@@ -87,8 +94,10 @@ public sealed class RuntimeHandoffActivationWorker(ILogger<RuntimeHandoffActivat
         if (!string.Equals(manifest.runtimeSha256, authorization.candidateRuntimeSha256, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Candidate runtime SHA-256 does not match the activation authorization.");
 
+        RuntimeSupervisorPathSafety.RequireSafeDirectoryTraversal(HandoffRoot, DevRoot);
         if (!File.Exists(ActiveStatePath))
             throw new FileNotFoundException("Active runtime state does not exist.", ActiveStatePath);
+        RuntimeSupervisorPathSafety.RejectReparseIfExists(ActiveStatePath);
         var active = JsonSerializer.Deserialize<ActiveState>(await File.ReadAllTextAsync(ActiveStatePath, token), JsonOptions)
             ?? throw new InvalidDataException("Invalid active runtime state.");
         if (active.SchemaVersion != 2 || active.Current is null)

@@ -15,12 +15,13 @@ public static class V4BootRecoveryStatusTools
     private const string SupervisorServiceName = "YowThiV4RuntimeSupervisor";
     private const string SupervisorExe = @"C:\Dev\YowThi-ERP-Dev-v4\runtime-supervisor\current\YowThi.RuntimeSupervisor.exe";
     private const string SupervisorDll = @"C:\Dev\YowThi-ERP-Dev-v4\runtime-supervisor\current\YowThi.RuntimeSupervisor.dll";
-    private const string ExpectedSupervisorDllSha256 = "26B0963B582C613C8E46C8D7BFAA2C6D32109EFE48569C31F5C67AF8EEA59B6F";
+    private const string ExpectedSupervisorDllSha256 = "B861FDFB29A9C30C5359C06F69CD15F2457403746D4D8AE5AC2EF575C008F55B";
 
     private const string BootstrapBackendServiceName = "YowThiDevelopmentAgent";
     private const string BootstrapBackendExe = @"C:\Program Files\YowThi\DevelopmentAgent\YowThi.DevelopmentAgent.exe";
 
     private const string DevRoot = @"C:\Dev\YowThi-ERP-Dev-v4";
+    private const string HandoffRoot = @"C:\Dev\YowThi-ERP-Dev-v4\.agent3-handoff";
     private const string ActiveStatePath = @"C:\Dev\YowThi-ERP-Dev-v4\.agent3-handoff\active-runtime.json";
     private const string TransferRoot = @"C:\Dev\YowThi-ERP-Dev-v4\staging\transfer";
     private const string TransferInboxRoot = @"C:\Dev\YowThi-ERP-Dev-v4\staging\transfer\inbox";
@@ -42,7 +43,7 @@ public static class V4BootRecoveryStatusTools
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 
     [McpServerTool(Name = "v4_boot_recovery_status", ReadOnly = true, Destructive = false, OpenWorld = false)]
-    [Description("Read the complete YowThi ERP Dev v4 reboot-recovery acceptance state in one call. It verifies the Automatic LocalSystem Runtime Supervisor, the Automatic Bootstrap backend, active Agent runtime identity, loopback 8828 and 8787 listeners, Formal 8792 and Bootstrap 8793 tunnels with supervisor parent ownership, fixed supervisor/tunnel/profile fingerprints, fixed transfer staging queues, and reboot ownership ordering. Returns accepted plus explicit failure reasons. This is read-only and does not start, stop, restart, mutate, repair, read secrets, execute shells, or access production paths.")]
+    [Description("Read the complete YowThi ERP Dev v4 reboot-recovery acceptance state in one call. It verifies the Automatic LocalSystem Runtime Supervisor, the Automatic Bootstrap backend, active Agent runtime identity, loopback 8828 and 8787 listeners, Formal 8792 and Bootstrap 8793 tunnels with supervisor parent ownership, fixed supervisor/tunnel/profile fingerprints, fixed transfer staging queues, active-runtime state storage traversal, and reboot ownership ordering. Returns accepted plus explicit failure reasons. This is read-only and does not start, stop, restart, mutate, repair, read secrets, execute shells, or access production paths.")]
     public static V4BootRecoveryStatusResult V4BootRecoveryStatus()
     {
         var failures = new List<string>();
@@ -68,7 +69,7 @@ public static class V4BootRecoveryStatusTools
         {
             supervisorDllSha256 = HashRegularFile(SupervisorDll);
             if (!string.Equals(supervisorDllSha256, ExpectedSupervisorDllSha256, StringComparison.OrdinalIgnoreCase))
-                failures.Add("Supervisor DLL SHA-256 does not match the accepted P54 deployment-recovery build.");
+                failures.Add("Supervisor DLL SHA-256 does not match the accepted active-runtime state traversal hardening build.");
         }
         catch (Exception ex)
         {
@@ -94,6 +95,8 @@ public static class V4BootRecoveryStatusTools
         }
 
         var transferStaging = ReadTransferStagingStatus(failures);
+
+        var activeStateStorage = ReadActiveStateStorageStatus(failures);
 
         ActiveState? active = null;
         try
@@ -212,6 +215,7 @@ public static class V4BootRecoveryStatusTools
             supervisorDllSha256,
             registry,
             transferStaging,
+            activeStateStorage,
             active,
             runtimeListener,
             bootstrapBackendListener,
@@ -288,6 +292,78 @@ public static class V4BootRecoveryStatusTools
         unsafePath = path;
         return false;
     }
+    private static ActiveStateStorageStatus ReadActiveStateStorageStatus(List<string> failures)
+    {
+        var rootPath = Path.GetFullPath(HandoffRoot);
+        var rootExists = Directory.Exists(rootPath);
+        var rootIsReparsePoint = false;
+        var traversalSafe = false;
+        string? unsafePath = null;
+        try
+        {
+            if (!rootExists)
+            {
+                failures.Add("active-runtime state root does not exist: " + rootPath);
+            }
+            else
+            {
+                rootIsReparsePoint = (File.GetAttributes(rootPath) & FileAttributes.ReparsePoint) != 0;
+                traversalSafe = ValidateFixedDirectoryTraversal(rootPath, DevRoot, out unsafePath);
+                if (rootIsReparsePoint)
+                    failures.Add("active-runtime state root may not be a reparse point: " + rootPath);
+                else if (!traversalSafe)
+                    failures.Add("active-runtime state root traverses a reparse point or escapes the fixed development root: " + (unsafePath ?? rootPath));
+            }
+        }
+        catch (Exception ex)
+        {
+            failures.Add("active-runtime state root verification failed: " + FormatError(ex));
+        }
+
+        var statePath = Path.GetFullPath(ActiveStatePath);
+        var stateExists = File.Exists(statePath);
+        var stateIsReparsePoint = false;
+        try
+        {
+            if (!stateExists)
+                failures.Add("active-runtime state file does not exist: " + statePath);
+            else
+            {
+                stateIsReparsePoint = (File.GetAttributes(statePath) & FileAttributes.ReparsePoint) != 0;
+                if (stateIsReparsePoint)
+                    failures.Add("active-runtime state file may not be a reparse point: " + statePath);
+            }
+        }
+        catch (Exception ex)
+        {
+            failures.Add("active-runtime state file verification failed: " + FormatError(ex));
+        }
+
+        return new(rootPath, rootExists, rootIsReparsePoint, traversalSafe, statePath, stateExists, stateIsReparsePoint);
+    }
+
+    private static bool ValidateFixedDirectoryTraversal(string path, string boundary, out string? unsafePath)
+    {
+        var root = Path.GetFullPath(boundary).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var current = new DirectoryInfo(Path.GetFullPath(path));
+        while (current is not null)
+        {
+            if ((current.Attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                unsafePath = current.FullName;
+                return false;
+            }
+
+            if (string.Equals(current.FullName.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), root, StringComparison.OrdinalIgnoreCase))
+            {
+                unsafePath = null;
+                return true;
+            }
+            current = current.Parent;
+        }
+        unsafePath = path;
+        return false;
+    }
     private static ServiceStatusResult? ReadAndValidateService(
         string serviceName,
         string expectedExecutable,
@@ -319,6 +395,8 @@ public static class V4BootRecoveryStatusTools
 
     private static ActiveState ReadActiveState()
     {
+        if (!ValidateFixedDirectoryTraversal(HandoffRoot, DevRoot, out var unsafePath))
+            throw new UnauthorizedAccessException("active-runtime state root traversal is unsafe: " + (unsafePath ?? HandoffRoot));
         if (!File.Exists(ActiveStatePath))
             throw new FileNotFoundException("active-runtime state does not exist.", ActiveStatePath);
         if ((File.GetAttributes(ActiveStatePath) & FileAttributes.ReparsePoint) != 0)
@@ -456,6 +534,7 @@ public static class V4BootRecoveryStatusTools
 
     public sealed record TransferDirectoryStatus(string Path, bool Exists, bool IsReparsePoint, bool TraversalSafe);
     public sealed record TransferStagingStatus(TransferDirectoryStatus Root, TransferDirectoryStatus Inbox, TransferDirectoryStatus Outbox);
+    public sealed record ActiveStateStorageStatus(string RootPath, bool RootExists, bool RootIsReparsePoint, bool TraversalSafe, string StatePath, bool StateExists, bool StateIsReparsePoint);
     public sealed record RuntimeSlot(string? PlanId, string RuntimeDll, string RuntimeSha256, string ListenUrl, string HealthUrl, int ProcessId);
     public sealed record ActiveState(int SchemaVersion, RuntimeSlot Current, RuntimeSlot? Previous, DateTimeOffset UpdatedUtc);
 }
@@ -470,6 +549,7 @@ public sealed record V4BootRecoveryStatusResult(
     string? SupervisorDllSha256,
     ToolRegistrySnapshot ToolRegistry,
     V4BootRecoveryStatusTools.TransferStagingStatus TransferStaging,
+    V4BootRecoveryStatusTools.ActiveStateStorageStatus ActiveStateStorage,
     V4BootRecoveryStatusTools.ActiveState? ActiveRuntime,
     TcpListenerItem? RuntimeListener,
     TcpListenerItem? BootstrapBackendListener,

@@ -12,6 +12,7 @@ public sealed class RuntimeSupervisorWorker(ILogger<RuntimeSupervisorWorker> log
 {
     private const string DevRoot = @"C:\Dev\YowThi-ERP-Dev-v4";
     private const string ReleaseRoot = DevRoot + @"\acceptance\agent-lifecycle\releases";
+    private const string HandoffRoot = DevRoot + @"\.agent3-handoff";
     private const string ActiveStatePath = DevRoot + @"\.agent3-handoff\active-runtime.json";
     private const string LegacyStatePath = DevRoot + @"\.agent3-handoff\runtime-state.json";
     private const string DotnetExe = @"C:\Program Files\dotnet\dotnet.exe";
@@ -78,6 +79,7 @@ public sealed class RuntimeSupervisorWorker(ILogger<RuntimeSupervisorWorker> log
 
     private async Task<ActiveState?> LoadOrImportActiveStateAsync(CancellationToken token)
     {
+        RuntimeSupervisorPathSafety.RequireSafeDirectoryTraversal(HandoffRoot, DevRoot);
         if (File.Exists(ActiveStatePath))
         {
             RejectReparse(ActiveStatePath);
@@ -363,9 +365,12 @@ public sealed class RuntimeSupervisorWorker(ILogger<RuntimeSupervisorWorker> log
 
     private static void WriteActiveState(ActiveState state)
     {
+        RuntimeSupervisorPathSafety.RequireSafeDirectoryTraversal(HandoffRoot, DevRoot);
+        RuntimeSupervisorPathSafety.RejectReparseIfExists(ActiveStatePath);
         ValidateSlot(state.Current);
         if (state.Previous is not null) ValidateSlot(state.Previous);
         var temp = ActiveStatePath + ".tmp";
+        RuntimeSupervisorPathSafety.RejectReparseIfExists(temp);
         File.WriteAllText(temp, JsonSerializer.Serialize(state, JsonOptions));
         File.Move(temp, ActiveStatePath, overwrite: true);
     }

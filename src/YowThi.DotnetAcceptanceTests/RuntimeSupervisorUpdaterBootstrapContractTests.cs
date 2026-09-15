@@ -4,8 +4,8 @@ namespace YowThi.DotnetAcceptanceTests;
 
 public sealed class RuntimeSupervisorUpdaterBootstrapContractTests
 {
-    private const string P54SupervisorDllSha = "26B0963B582C613C8E46C8D7BFAA2C6D32109EFE48569C31F5C67AF8EEA59B6F";
-    private const string PreviousSupervisorDllSha = "6ADB4841E9398D82AB7A4AAEBF3251EF77671F05401BE11A213640B0465156D2";
+    private const string ActiveStateTraversalSupervisorDllSha = "B861FDFB29A9C30C5359C06F69CD15F2457403746D4D8AE5AC2EF575C008F55B";
+    private const string PreviousP54SupervisorDllSha = "26B0963B582C613C8E46C8D7BFAA2C6D32109EFE48569C31F5C67AF8EEA59B6F";
 
     [Fact]
     public void UpdaterDispatch_SeparatesBootstrapServiceAndAtomicUpdateModes()
@@ -45,13 +45,13 @@ public sealed class RuntimeSupervisorUpdaterBootstrapContractTests
     }
 
     [Fact]
-    public void BootRecoveryFingerprint_IsPinnedToP54Supervisor()
+    public void BootRecoveryFingerprint_IsPinnedToActiveStateTraversalHardenedSupervisor()
     {
         var source = ReadProjectSource("YowThi.DevelopmentAgent3", Path.Combine("Inspection", "V4BootRecoveryStatusTools.cs"));
 
-        Assert.Contains(P54SupervisorDllSha, source, StringComparison.Ordinal);
-        Assert.Contains("accepted P54 deployment-recovery build", source, StringComparison.Ordinal);
-        Assert.DoesNotContain(PreviousSupervisorDllSha, source, StringComparison.Ordinal);
+        Assert.Contains(ActiveStateTraversalSupervisorDllSha, source, StringComparison.Ordinal);
+        Assert.Contains("accepted active-runtime state traversal hardening build", source, StringComparison.Ordinal);
+        Assert.DoesNotContain(PreviousP54SupervisorDllSha, source, StringComparison.Ordinal);
     }
 
     private static string ReadProjectSource(string projectName, string relativePath)
