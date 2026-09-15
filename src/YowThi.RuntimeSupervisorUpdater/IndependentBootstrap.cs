@@ -152,7 +152,10 @@ internal static class IndependentBootstrap
         ValidateOneShotServiceName(serviceName);
         ValidateGuidRequestPath(requestPath);
         RequireSha(expectedSelfSha, "expectedSelfSha");
-        var self = RequireExactSelf();
+        var processPath = Path.GetFullPath(Environment.ProcessPath ?? throw new InvalidOperationException("Updater executable path is unavailable."));
+        var self = string.Equals(processPath, Path.GetFullPath(ExpectedBootstrapExecutable), StringComparison.OrdinalIgnoreCase)
+            ? RequireExactSelf()
+            : ReusableBootstrap.RequireReusableBootstrapSelf();
         if (!string.Equals(HashFile(self), expectedSelfSha, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("One-shot updater executable changed after bootstrap.");
 

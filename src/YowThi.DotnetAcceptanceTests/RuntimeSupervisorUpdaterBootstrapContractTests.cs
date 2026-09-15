@@ -4,7 +4,7 @@ namespace YowThi.DotnetAcceptanceTests;
 
 public sealed class RuntimeSupervisorUpdaterBootstrapContractTests
 {
-    private const string ActiveStateTraversalSupervisorDllSha = "B861FDFB29A9C30C5359C06F69CD15F2457403746D4D8AE5AC2EF575C008F55B";
+    private const string ActiveStateTraversalSupervisorDllSha = "5C312E8B54AC34A23A6017BE1BF8B0C25270DB79073220EA41A39322C1C1D34D";
     private const string PreviousP54SupervisorDllSha = "26B0963B582C613C8E46C8D7BFAA2C6D32109EFE48569C31F5C67AF8EEA59B6F";
 
     [Fact]

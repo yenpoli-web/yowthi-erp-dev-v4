@@ -47,6 +47,19 @@ public sealed class RuntimeSupervisorReusableUpdaterContractTests
     }
 
     [Fact]
+    public void OneShotWorker_PreservesP55PinAndAcceptsReusableAcceptanceBuildIdentity()
+    {
+        var legacy = ReadProjectSource("YowThi.RuntimeSupervisorUpdater", "IndependentBootstrap.cs");
+        var reusable = ReadProjectSource("YowThi.RuntimeSupervisorUpdater", "ReusableBootstrap.cs");
+
+        Assert.Contains("ExpectedBootstrapExecutable", legacy, StringComparison.Ordinal);
+        Assert.Contains("? RequireExactSelf()", legacy, StringComparison.Ordinal);
+        Assert.Contains(": ReusableBootstrap.RequireReusableBootstrapSelf()", legacy, StringComparison.Ordinal);
+        Assert.Contains("HashFile(self), expectedSelfSha", legacy, StringComparison.Ordinal);
+        Assert.Contains("internal static string RequireReusableBootstrapSelf()", reusable, StringComparison.Ordinal);
+        Assert.Contains("buildName.Contains(\"-build\"", reusable, StringComparison.Ordinal);
+    }
+    [Fact]
     public void AtomicUpdate_RevalidatesFixedRootsInsteadOfCreatingSecurityBoundariesOnDemand()
     {
         var source = ReadProjectSource("YowThi.RuntimeSupervisorUpdater", "Program.cs");

@@ -147,7 +147,7 @@ internal static class ReusableBootstrap
         return 0;
     }
 
-    private static string RequireReusableBootstrapSelf()
+    internal static string RequireReusableBootstrapSelf()
     {
         var self = Path.GetFullPath(Environment.ProcessPath ?? throw new InvalidOperationException("Updater executable path is unavailable."));
         if (!string.Equals(Path.GetFileName(self), UpdaterExeName, StringComparison.OrdinalIgnoreCase))
