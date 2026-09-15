@@ -23,6 +23,8 @@ internal static class Program
         if (!OperatingSystem.IsWindows()) return 90;
         if (args.Length == 1 && string.Equals(args[0], "--bootstrap-p54", StringComparison.Ordinal))
             return IndependentBootstrap.BootstrapP54();
+        if (args.Length == 2 && string.Equals(args[0], "--bootstrap-candidate", StringComparison.Ordinal))
+            return ReusableBootstrap.BootstrapCandidate(args[1]);
         if (args.Length == 4 && string.Equals(args[0], "--service", StringComparison.Ordinal))
             return IndependentBootstrap.RunOneShotService(args[1], args[2], args[3]);
         if (args.Length == 1)
@@ -37,10 +39,7 @@ internal static class Program
         var newMoved = false;
         try
         {
-            Directory.CreateDirectory(PendingRoot);
-            Directory.CreateDirectory(CompletedRoot);
-            Directory.CreateDirectory(FailedRoot);
-            Directory.CreateDirectory(RollbackRoot);
+            ValidateFixedRoots();
 
             requestPath = Path.GetFullPath(args[0]);
             RequireDirectFileChild(requestPath, PendingRoot);
@@ -123,6 +122,40 @@ internal static class Program
         }
     }
 
+    private static void ValidateFixedRoots()
+    {
+        RequireSafeDirectoryTraversal(DevRoot, DevRoot);
+        RequireSafeDirectoryTraversal(StagingRoot, DevRoot);
+        RequireSafeDirectoryTraversal(SupervisorRoot, DevRoot);
+        RequireSafeDirectoryTraversal(CurrentDirectory, SupervisorRoot);
+        RequireSafeDirectoryTraversal(PendingRoot, SupervisorRoot);
+        RequireSafeDirectoryTraversal(CompletedRoot, SupervisorRoot);
+        RequireSafeDirectoryTraversal(FailedRoot, SupervisorRoot);
+        RequireSafeDirectoryTraversal(RollbackRoot, SupervisorRoot);
+    }
+
+    private static void RequireSafeDirectoryTraversal(string path, string boundary)
+    {
+        var full = Path.GetFullPath(path).TrimEnd('\\', '/');
+        var root = Path.GetFullPath(boundary).TrimEnd('\\', '/');
+        if (!Directory.Exists(full))
+            throw new DirectoryNotFoundException("Required fixed directory does not exist: " + full);
+        if (!string.Equals(full, root, StringComparison.OrdinalIgnoreCase) &&
+            !full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            throw new UnauthorizedAccessException("Fixed directory escaped its boundary: " + full);
+
+        var current = new DirectoryInfo(full);
+        while (current is not null)
+        {
+            if ((current.Attributes & FileAttributes.ReparsePoint) != 0)
+                throw new UnauthorizedAccessException("Reparse point rejected in fixed directory traversal: " + current.FullName);
+            var currentFull = current.FullName.TrimEnd('\\', '/');
+            if (string.Equals(currentFull, root, StringComparison.OrdinalIgnoreCase))
+                return;
+            current = current.Parent;
+        }
+        throw new UnauthorizedAccessException("Fixed directory traversal did not reach its boundary: " + full);
+    }
     private static void TryRollback(bool oldMoved, bool newMoved, string? backupDirectory, string? updateId)
     {
         if (!oldMoved) return;
