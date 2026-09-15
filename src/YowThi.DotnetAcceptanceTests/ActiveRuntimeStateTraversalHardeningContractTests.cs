@@ -42,7 +42,7 @@ public sealed class ActiveRuntimeStateTraversalHardeningContractTests
         Assert.Contains("ReadActiveStateStorageStatus(failures)", source, StringComparison.Ordinal);
         Assert.Contains("ValidateFixedDirectoryTraversal(HandoffRoot, DevRoot", source, StringComparison.Ordinal);
         Assert.Contains("active-runtime state root traversal is unsafe", source, StringComparison.Ordinal);
-        Assert.Contains("5C312E8B54AC34A23A6017BE1BF8B0C25270DB79073220EA41A39322C1C1D34D", source, StringComparison.Ordinal);
+        Assert.Contains("C41662D394C8D183991CACB66521164996955B1FA381D4C622E9813D3582BE9E", source, StringComparison.Ordinal);
     }
 
     private static string ReadProjectSource(string projectName, string relativePath)
