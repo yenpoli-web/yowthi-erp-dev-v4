@@ -15,7 +15,7 @@ public static class V4BootRecoveryStatusTools
     private const string SupervisorServiceName = "YowThiV4RuntimeSupervisor";
     private const string SupervisorExe = @"C:\Dev\YowThi-ERP-Dev-v4\runtime-supervisor\current\YowThi.RuntimeSupervisor.exe";
     private const string SupervisorDll = @"C:\Dev\YowThi-ERP-Dev-v4\runtime-supervisor\current\YowThi.RuntimeSupervisor.dll";
-    private const string ExpectedSupervisorDllSha256 = "C41662D394C8D183991CACB66521164996955B1FA381D4C622E9813D3582BE9E";
+    private const string ExpectedSupervisorDllSha256 = "E76F209FA32A327FC5B28B93457F571B4A5F41DD57696BBF4913F8214CC5FE06";
 
     private const string BootstrapBackendServiceName = "YowThiDevelopmentAgent";
     private const string BootstrapBackendExe = @"C:\Program Files\YowThi\DevelopmentAgent\YowThi.DevelopmentAgent.exe";
