@@ -47,6 +47,7 @@ internal static class Program
             }
             else
             {
+                RefuseBootstrapFallbackWhenDirectRequestFilesExist();
                 var bootstrap = FindSingleEligibleBootstrapRequest(out var bootstrapPath, out var bootstrapSha256);
                 var releaseName = GetReleaseName(bootstrap.Target.Directory);
                 if (!ConfirmDeployment(releaseName, bootstrap.Current.RuntimeSha256, bootstrap.Target.RuntimeSha256, bootstrapPromotion: true))
@@ -196,6 +197,43 @@ internal static class Program
         requestPath = candidates[0].Path;
         requestSha256 = candidates[0].Sha;
         return true;
+    }
+
+    private static void RefuseBootstrapFallbackWhenDirectRequestFilesExist()
+    {
+        if (!Directory.Exists(RequestRoot))
+            return;
+        RejectReparse(RequestRoot);
+
+        var files = Directory.GetFiles(RequestRoot, "*.json", SearchOption.TopDirectoryOnly);
+        if (files.Length == 0)
+            return;
+
+        var now = DateTimeOffset.UtcNow;
+        var expiredEligibleShapeCount = 0;
+        foreach (var path in files)
+        {
+            RejectReparse(path);
+            try
+            {
+                var candidate = JsonSerializer.Deserialize<DeploymentRequest>(File.ReadAllBytes(path), JsonOptions);
+                if (candidate is not null &&
+                    candidate.SchemaVersion == 1 &&
+                    !candidate.ProcessAuthorization &&
+                    candidate.RequiresDedicatedSupervisorExecutor &&
+                    candidate.ExpiresUtc <= now)
+                    expiredEligibleShapeCount++;
+            }
+            catch (JsonException)
+            {
+                // Any malformed direct request keeps bootstrap fallback fail-closed below.
+            }
+        }
+
+        if (expiredEligibleShapeCount == files.Length)
+            throw new UnauthorizedAccessException("Direct runtime deployment request exists but has expired; create a fresh direct request instead of using bootstrap promotion.");
+
+        throw new InvalidOperationException("Direct runtime deployment request queue contains ineligible request files; refusing bootstrap promotion.");
     }
 
     private static BootstrapTransitionRequest FindSingleEligibleBootstrapRequest(out string requestPath, out string requestSha256)

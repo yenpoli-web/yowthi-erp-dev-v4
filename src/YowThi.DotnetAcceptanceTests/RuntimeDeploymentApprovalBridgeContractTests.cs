@@ -96,6 +96,21 @@ public sealed class RuntimeDeploymentApprovalBridgeContractTests
     }
 
     [Fact]
+    public void BootstrapFallback_FailsClosedWhenDirectRequestQueueIsNonEmptyButIneligible()
+    {
+        var source = File.ReadAllText(Source("YowThi.RuntimeDeploymentApprovalBridge", "Program.cs"));
+        Assert.Contains("RefuseBootstrapFallbackWhenDirectRequestFilesExist();", source, StringComparison.Ordinal);
+        Assert.Contains("Direct runtime deployment request exists but has expired; create a fresh direct request instead of using bootstrap promotion.", source, StringComparison.Ordinal);
+        Assert.Contains("Direct runtime deployment request queue contains ineligible request files; refusing bootstrap promotion.", source, StringComparison.Ordinal);
+        Assert.Contains("Directory.GetFiles(RequestRoot, \"*.json\", SearchOption.TopDirectoryOnly)", source, StringComparison.Ordinal);
+
+        var guard = source.IndexOf("RefuseBootstrapFallbackWhenDirectRequestFilesExist();", StringComparison.Ordinal);
+        var fallback = source.IndexOf("FindSingleEligibleBootstrapRequest(out var bootstrapPath", StringComparison.Ordinal);
+        Assert.True(guard >= 0, "Direct-request fail-closed guard is missing.");
+        Assert.True(fallback > guard, "Bootstrap fallback must be reached only after the direct-request fail-closed guard.");
+    }
+
+    [Fact]
     public void P31Schemas_BindCurrentUserKeyAndActivatedPackage()
     {
         var receipt = File.ReadAllText(Root("P31-RUNTIME-DEPLOYMENT-KEY-RECEIPT.schema.json"));
